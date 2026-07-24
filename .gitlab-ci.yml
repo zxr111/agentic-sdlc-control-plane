@@ -51,7 +51,7 @@ publish_image:
   services:
     - name: docker:27-dind
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $REGISTRY_HOST != "" && $REGISTRY_IMAGE != "" && $REGISTRY_USER != "" && $REGISTRY_PASSWORD != ""'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $ENABLE_TEST_IMAGE_PUBLISH == "true"'
   script:
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
     - docker build --pull=false -t "$REGISTRY_IMAGE:$IMAGE_TAG" .
@@ -64,7 +64,7 @@ deploy_test:
     name: test
   resource_group: ai-factory-test
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KUBE_CONTEXT != "" && $REGISTRY_HOST != "" && $REGISTRY_IMAGE != "" && $REGISTRY_USER != "" && $REGISTRY_PASSWORD != "" && $MYSQL_DSN != "" && $GITLAB_API_TOKEN != "" && $GITLAB_WEBHOOK_SECRET != "" && $CONFLUENCE_API_TOKEN != "" && $OPENAI_API_KEY != ""'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $ENABLE_TEST_DEPLOY == "true"'
       when: manual
   script:
     - kubectl config use-context "$KUBE_CONTEXT"

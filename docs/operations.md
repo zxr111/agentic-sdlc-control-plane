@@ -34,7 +34,7 @@ Configure `OPENAI_API_KEY` as Masked and Hidden before deployment. Rotate any ke
 
 ## Deployment
 
-The pipeline always compiles deployable Linux binaries. `publish_image` appears only when dedicated registry variables are configured. `deploy_test` appears only when all registry, database, API, and Kubernetes prerequisites are present; it remains a manual Engineer Gate. It creates the image-pull Secret, applies runtime Secrets, runs the migration Job, and then waits for API and worker rollouts. The migration process uses a MySQL advisory migration lock and idempotent DDL.
+The pipeline always compiles deployable Linux binaries. After dedicated registry variables are verified, set `ENABLE_TEST_IMAGE_PUBLISH=true` to enable image publication. After every deployment prerequisite is verified, set `ENABLE_TEST_DEPLOY=true`; `deploy_test` still remains a manual Engineer Gate. It creates the image-pull Secret, applies runtime Secrets, runs the migration Job, and then waits for API and worker rollouts. The migration process uses a MySQL advisory migration lock and idempotent DDL.
 
 Before first deployment, verify the ingress class, hostname, TLS secret, registry pull secret, MySQL network route, and NetworkPolicy namespace selectors against the test cluster.
 
