@@ -30,17 +30,32 @@ verify_mysql:
   script:
     - go test -tags=integration ./internal/store
 
-build_image:
+build_binaries:
+  stage: image
+  image: golang:1.25-alpine
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - mkdir -p dist
+    - CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o dist/factory-api ./cmd/factory-api
+    - CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o dist/factory-worker ./cmd/factory-worker
+    - CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o dist/factory-migrate ./cmd/factory-migrate
+  artifacts:
+    expire_in: 7 days
+    paths:
+      - dist/
+
+publish_image:
   stage: image
   image: docker:27
   services:
     - name: docker:27-dind
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $REGISTRY_HOST != "" && $REGISTRY_IMAGE != "" && $REGISTRY_USER != "" && $REGISTRY_PASSWORD != ""'
   script:
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-    - docker build --pull=false -t "$CI_REGISTRY_IMAGE:$IMAGE_TAG" .
-    - docker push "$CI_REGISTRY_IMAGE:$IMAGE_TAG"
+    - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
+    - docker build --pull=false -t "$REGISTRY_IMAGE:$IMAGE_TAG" .
+    - docker push "$REGISTRY_IMAGE:$IMAGE_TAG"
 
 deploy_test:
   stage: deploy_test
@@ -49,11 +64,16 @@ deploy_test:
     name: test
   resource_group: ai-factory-test
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KUBE_CONTEXT != "" && $REGISTRY_HOST != "" && $REGISTRY_IMAGE != "" && $REGISTRY_USER != "" && $REGISTRY_PASSWORD != "" && $MYSQL_DSN != "" && $GITLAB_API_TOKEN != "" && $GITLAB_WEBHOOK_SECRET != "" && $CONFLUENCE_API_TOKEN != "" && $OPENAI_API_KEY != ""'
       when: manual
   script:
     - kubectl config use-context "$KUBE_CONTEXT"
     - kubectl apply -f deploy/overlays/test/namespace.yaml
+    - kubectl -n ai-factory-test create secret docker-registry registry-credentials
+      --docker-server="$REGISTRY_HOST"
+      --docker-username="$REGISTRY_USER"
+      --docker-password="$REGISTRY_PASSWORD"
+      --dry-run=client -o yaml | kubectl apply -f -
     - kubectl -n ai-factory-test create secret generic ai-sdlc-factory-secrets
       --from-literal=MYSQL_DSN="$MYSQL_DSN"
       --from-literal=GITLAB_API_TOKEN="$GITLAB_API_TOKEN"
@@ -64,7 +84,7 @@ deploy_test:
       --dry-run=client -o yaml | kubectl apply -f -
     - kubectl -n ai-factory-test delete job ai-sdlc-factory-migrate --ignore-not-found=true
     - kubectl kustomize deploy/overlays/test |
-      sed "s#registry.kuainiujinke.com/argus/ai-sdlc-factory:test#$CI_REGISTRY_IMAGE:$IMAGE_TAG#g" |
+      sed "s#registry.kuainiujinke.com/argus/ai-sdlc-factory:test#$REGISTRY_IMAGE:$IMAGE_TAG#g" |
       kubectl apply -f -
     - kubectl -n ai-factory-test wait --for=condition=complete job/ai-sdlc-factory-migrate --timeout=300s
     - kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-api --timeout=300s
