@@ -1,0 +1,25 @@
+[
+  {
+    "gitlab_project_id": 3533,
+    "path": "argus/argus-server",
+    "enabled_label": "automation::enabled",
+    "module": "PID",
+    "reviewer_ids": {
+      "REQUIREMENT": [995],
+      "PRD": [995],
+      "TEST": [995]
+    },
+    "reviewer_mentions": {
+      "REQUIREMENT": ["brucegong"],
+      "PRD": ["brucegong"],
+      "TEST": ["brucegong"]
+    },
+    "owner_ids": {
+      "requirements": 995,
+      "backend": 1272,
+      "frontend": 1077,
+      "fullstack": 1077,
+      "quality": 995
+    }
+  }
+]

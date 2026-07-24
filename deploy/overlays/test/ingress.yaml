@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-sdlc-factory-api
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 2m
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ai-factory-test.kuainiu.io
+      secretName: ai-factory-test-tls
+  rules:
+    - host: ai-factory-test.kuainiu.io
+      http:
+        paths:
+          - path: /webhooks/gitlab
+            pathType: Exact
+            backend:
+              service:
+                name: ai-sdlc-factory-api
+                port:
+                  name: http

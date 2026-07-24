@@ -1,0 +1,68 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai-factory-test
+resources:
+  - ../../base
+  - namespace.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: ai-sdlc-factory-config
+    envs:
+      - config.env
+    files:
+      - projects.json
+generatorOptions:
+  disableNameSuffixHash: true
+images:
+  - name: ai-sdlc-factory
+    newName: registry.kuainiujinke.com/argus/ai-sdlc-factory
+    newTag: test
+patches:
+  - target:
+      kind: Deployment
+      name: ai-sdlc-factory-api
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: FACTORY_PROJECTS_FILE
+            value: /etc/factory/projects.json
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: project-config
+            mountPath: /etc/factory
+            readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: project-config
+            configMap:
+              name: ai-sdlc-factory-config
+              items:
+                - key: projects.json
+                  path: projects.json
+  - target:
+      kind: Deployment
+      name: ai-sdlc-factory-worker
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: FACTORY_PROJECTS_FILE
+          value: /etc/factory/projects.json
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: project-config
+            mountPath: /etc/factory
+            readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: project-config
+            configMap:
+              name: ai-sdlc-factory-config
+              items:
+                - key: projects.json
+                  path: projects.json

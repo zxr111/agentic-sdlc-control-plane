@@ -1,0 +1,67 @@
+stages: [verify, image, deploy_test]
+
+variables:
+  GOFLAGS: "-mod=vendor"
+  IMAGE_TAG: "$CI_COMMIT_SHA"
+
+verify:
+  stage: verify
+  image: golang:1.25-alpine
+  script:
+    - go test ./...
+    - go vet ./...
+
+verify_mysql:
+  stage: verify
+  image: golang:1.25-alpine
+  services:
+    - name: mysql:8.4
+      alias: mysql
+  variables:
+    MYSQL_DATABASE: ai_sdlc_factory_test
+    MYSQL_USER: factory
+    MYSQL_PASSWORD: factory
+    MYSQL_ROOT_PASSWORD: root
+    MYSQL_TEST_DSN: "factory:factory@tcp(mysql:3306)/ai_sdlc_factory_test?parseTime=true&charset=utf8mb4&collation=utf8mb4_0900_ai_ci&loc=UTC"
+  script:
+    - go test -tags=integration ./internal/store
+
+image:
+  stage: image
+  image: docker:27
+  services:
+    - name: docker:27-dind
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker build --pull=false -t "$CI_REGISTRY_IMAGE:$IMAGE_TAG" .
+    - docker push "$CI_REGISTRY_IMAGE:$IMAGE_TAG"
+
+deploy_test:
+  stage: deploy_test
+  image: bitnami/kubectl:1.30
+  environment:
+    name: test
+  resource_group: ai-factory-test
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+  script:
+    - kubectl config use-context "$KUBE_CONTEXT"
+    - kubectl apply -f deploy/overlays/test/namespace.yaml
+    - kubectl -n ai-factory-test create secret generic ai-sdlc-factory-secrets
+      --from-literal=MYSQL_DSN="$MYSQL_DSN"
+      --from-literal=GITLAB_API_TOKEN="$GITLAB_API_TOKEN"
+      --from-literal=GITLAB_WEBHOOK_SECRET="$GITLAB_WEBHOOK_SECRET"
+      --from-literal=CONFLUENCE_EMAIL="$CONFLUENCE_EMAIL"
+      --from-literal=CONFLUENCE_API_TOKEN="$CONFLUENCE_API_TOKEN"
+      --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY"
+      --dry-run=client -o yaml | kubectl apply -f -
+    - kubectl -n ai-factory-test delete job ai-sdlc-factory-migrate --ignore-not-found=true
+    - kubectl kustomize deploy/overlays/test |
+      sed "s#registry.kuainiujinke.com/argus/ai-sdlc-factory:test#$CI_REGISTRY_IMAGE:$IMAGE_TAG#g" |
+      kubectl apply -f -
+    - kubectl -n ai-factory-test wait --for=condition=complete job/ai-sdlc-factory-migrate --timeout=300s
+    - kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-api --timeout=300s
+    - kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-worker --timeout=300s

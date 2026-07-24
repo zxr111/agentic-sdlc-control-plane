@@ -1,0 +1,8 @@
+.env
+.idea/
+.vscode/
+bin/
+coverage.out
+dist/
+deploy/overlays/test/secret.yaml
+projects.local.json
