@@ -1,5 +1,9 @@
 stages: [verify, image, deploy_test]
 
+default:
+  tags:
+    - hk-cluster-devops-cicd
+
 variables:
   GOFLAGS: "-mod=vendor"
   IMAGE_TAG: "$CI_COMMIT_SHA"
