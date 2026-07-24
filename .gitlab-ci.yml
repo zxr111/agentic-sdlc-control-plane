@@ -26,7 +26,7 @@ verify_mysql:
   script:
     - go test -tags=integration ./internal/store
 
-image:
+build_image:
   stage: image
   image: docker:27
   services:
