@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'">
+  <title>AI Factory Control Room</title>
+  <link rel="stylesheet" href="/dashboard/assets/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <div>
+          <p class="eyebrow">AI Native SDLC</p>
+          <h1>Factory Control Room</h1>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span class="connection" id="connection">
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span id="connection-text">Connecting</span>
+        </span>
+        <span class="updated" id="updated-at">Not synced</span>
+        <button class="button button-secondary" id="refresh-button" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="summary-grid" aria-label="Factory summary">
+        <article class="metric">
+          <div class="metric-icon metric-icon-neutral" aria-hidden="true">Σ</div>
+          <div>
+            <span class="metric-label">Tracked workflows</span>
+            <strong class="metric-value" id="metric-total">—</strong>
+          </div>
+        </article>
+        <article class="metric">
+          <div class="metric-icon metric-icon-running" aria-hidden="true">↻</div>
+          <div>
+            <span class="metric-label">AI in progress</span>
+            <strong class="metric-value" id="metric-progress">—</strong>
+          </div>
+        </article>
+        <article class="metric metric-gate">
+          <div class="metric-icon metric-icon-gate" aria-hidden="true">◇</div>
+          <div>
+            <span class="metric-label">Waiting for Engineer</span>
+            <strong class="metric-value" id="metric-gates">—</strong>
+          </div>
+        </article>
+        <article class="metric">
+          <div class="metric-icon metric-icon-ready" aria-hidden="true">✓</div>
+          <div>
+            <span class="metric-label">Ready for architecture</span>
+            <strong class="metric-value" id="metric-ready">—</strong>
+          </div>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <aside class="workflow-browser" aria-label="Workflow browser">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Live work</p>
+              <h2>Workflows</h2>
+            </div>
+            <span class="count-badge" id="workflow-count">0</span>
+          </div>
+          <label class="search">
+            <span class="sr-only">Search workflows</span>
+            <span aria-hidden="true">⌕</span>
+            <input id="search-input" type="search" placeholder="Search issue or project">
+          </label>
+          <div class="filter-row" role="group" aria-label="Workflow status filter">
+            <button class="filter is-active" type="button" data-filter="all">All</button>
+            <button class="filter" type="button" data-filter="gate">Needs review</button>
+            <button class="filter" type="button" data-filter="active">Running</button>
+            <button class="filter" type="button" data-filter="ready">Ready</button>
+          </div>
+          <div class="workflow-list" id="workflow-list">
+            <div class="list-placeholder">Waiting for workflow data…</div>
+          </div>
+        </aside>
+
+        <div class="detail" id="workflow-detail">
+          <section class="empty-state">
+            <div class="empty-visual" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <p class="eyebrow">No workflow selected</p>
+            <h2>Choose a workflow to inspect its journey</h2>
+            <p>The control room shows current automation, Engineer Gates, source traceability, artifacts, retries, and the immutable audit trail.</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="operations" aria-labelledby="operations-title">
+        <div class="section-heading operations-heading">
+          <div>
+            <p class="eyebrow">Runtime</p>
+            <h2 id="operations-title">Queue health</h2>
+          </div>
+          <span class="operations-status" id="operations-status">Checking</span>
+        </div>
+        <div class="queue-grid" id="queue-grid"></div>
+        <div id="failure-list"></div>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/dashboard/assets/app.js" defer></script>
+</body>
+</html>

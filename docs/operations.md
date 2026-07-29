@@ -38,6 +38,8 @@ The pipeline always compiles deployable Linux binaries. After dedicated registry
 
 Before first deployment, verify the ingress class, hostname, TLS secret, registry pull secret, PostgreSQL network route, TLS mode, and NetworkPolicy namespace selectors against the test cluster.
 
+The test Ingress remains webhook-only. The User Center administrator Dashboard reaches `GET /api/dashboard` through the Hermes Pod in `argus-test`; its NetworkPolicy access depends on the exact `app=argus-hermes-api` Pod label. Do not expose the Dashboard paths through the Factory Ingress.
+
 ## GitLab webhook
 
 Create one project webhook after the API is healthy:

@@ -271,6 +271,24 @@ func TestPostgresWorkflowArtifactsGateAndOutboxRoundTrip(t *testing.T) {
 		t.Fatal("waiting workflow was not reconcilable")
 	}
 
+	dashboard, err := repository.Dashboard(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dashboardWorkflow *DashboardWorkflow
+	for index := range dashboard.Workflows {
+		if dashboard.Workflows[index].ID == workflow.ID {
+			dashboardWorkflow = &dashboard.Workflows[index]
+			break
+		}
+	}
+	if dashboardWorkflow == nil {
+		t.Fatal("workflow was not returned by the dashboard query")
+	}
+	if len(dashboardWorkflow.Gates) < 3 || len(dashboardWorkflow.Artifacts) != 3 ||
+		len(dashboardWorkflow.Sources) != 1 || len(dashboardWorkflow.Activity) == 0 {
+		t.Fatalf("incomplete dashboard workflow: %#v", dashboardWorkflow)
+	}
 }
 
 func TestExpiredQueueLeaseIsRecovered(t *testing.T) {

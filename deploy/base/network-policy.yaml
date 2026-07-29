@@ -15,6 +15,16 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argus-test
+          podSelector:
+            matchLabels:
+              app: argus-hermes-api
+      ports:
+        - protocol: TCP
+          port: 8080
   egress:
     - to:
         - namespaceSelector:

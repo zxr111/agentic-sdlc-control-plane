@@ -19,6 +19,16 @@ GitLab Intake Issue
 
 The API accepts only GitLab Issue and Note webhooks. The worker consumes a durable PostgreSQL queue, delivers a transactional outbox, and performs a ten-minute reconciliation scan for missed Gate comments.
 
+## Factory Control Room
+
+The API also serves a read-only operations dashboard at:
+
+```text
+http://127.0.0.1:8080/dashboard/
+```
+
+It refreshes every ten seconds and presents workflow state-machine progress, open Engineer Gates and copyable approval commands, latest Agent artifacts, immutable Confluence source versions, audit activity, queue health, and dead-letter failures. The local Compose port exposes it for development. The test-environment Ingress exposes only the exact GitLab webhook path. In the test cluster, the administrator-only User Center page reads the same JSON contract through the Hermes backend-for-frontend; browsers never call this service directly.
+
 ## Gate commands
 
 An authorized active GitLab project member decides a Gate with a comment:
@@ -69,7 +79,7 @@ docker compose ps
 curl -i http://127.0.0.1:8080/readyz
 ```
 
-Use `docker compose logs -f api worker` for runtime logs. The project configuration is mounted read-only at
+Open `http://127.0.0.1:8080/dashboard/` after the API is healthy. Use `docker compose logs -f api worker` for runtime logs. The project configuration is mounted read-only at
 `/etc/factory/projects.json`; no `FACTORY_PROJECTS_FILE` export is required for Compose.
 
 ## Configuration
@@ -92,6 +102,7 @@ Non-secret configuration includes `GITLAB_API_URL`, `CONFLUENCE_BASE_URL`, `OPEN
 - `cmd/factory-migrate`: PostgreSQL migration job.
 - `internal/agents`: OpenAI Responses API structured-output contracts and renderers.
 - `internal/connectors`: Confluence and GitLab API clients.
+- `internal/dashboard`: embedded read-only control room and dashboard API.
 - `internal/store`: PostgreSQL schema, queue leases, outbox, Gates, snapshots, and audit log.
 - `deploy/overlays/test`: ACK test-environment manifests.
 

@@ -4,6 +4,8 @@
 
 `factory-api` validates the GitLab webhook secret, accepts only Issue/Note events from configured projects, normalizes them, and persists them before returning HTTP 202.
 
+The same binary serves the local read-only Factory Control Room. `GET /api/dashboard` assembles bounded operational projections from workflow, Gate, artifact, source, audit, event queue, and outbox tables. The embedded browser UI never performs state transitions or Gate decisions; authorization remains in GitLab comments. In the test cluster, the Hermes backend-for-frontend is the only application caller allowed to read this endpoint, and its authenticated administrator page consumes the shared JSON contract.
+
 `factory-worker` claims queue and outbox records with `SELECT ... FOR UPDATE SKIP LOCKED`. Every claim has a lease, attempt count, exponential retry, and dead-letter terminal state. Expired leases are recovered by another worker.
 
 ## State machine
