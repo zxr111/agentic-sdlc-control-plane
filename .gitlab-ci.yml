@@ -15,18 +15,17 @@ verify:
     - go test ./...
     - go vet ./...
 
-verify_mysql:
+verify_postgres:
   stage: verify
   image: golang:1.25-alpine
   services:
-    - name: mysql:8.4
-      alias: mysql
+    - name: postgres:16-alpine
+      alias: postgres
   variables:
-    MYSQL_DATABASE: ai_sdlc_factory_test
-    MYSQL_USER: factory
-    MYSQL_PASSWORD: factory
-    MYSQL_ROOT_PASSWORD: root
-    MYSQL_TEST_DSN: "factory:factory@tcp(mysql:3306)/ai_sdlc_factory_test?parseTime=true&charset=utf8mb4&collation=utf8mb4_0900_ai_ci&loc=UTC"
+    POSTGRES_DB: ai_sdlc_factory_test
+    POSTGRES_USER: factory
+    POSTGRES_PASSWORD: factory
+    DATABASE_TEST_URL: "postgres://factory:factory@postgres:5432/ai_sdlc_factory_test?sslmode=disable"
   script:
     - go test -tags=integration ./internal/store
 
@@ -75,7 +74,7 @@ deploy_test:
       --docker-password="$REGISTRY_PASSWORD"
       --dry-run=client -o yaml | kubectl apply -f -
     - kubectl -n ai-factory-test create secret generic ai-sdlc-factory-secrets
-      --from-literal=MYSQL_DSN="$MYSQL_DSN"
+      --from-literal=DATABASE_URL="$DATABASE_URL"
       --from-literal=GITLAB_API_TOKEN="$GITLAB_API_TOKEN"
       --from-literal=GITLAB_WEBHOOK_SECRET="$GITLAB_WEBHOOK_SECRET"
       --from-literal=CONFLUENCE_EMAIL="$CONFLUENCE_EMAIL"

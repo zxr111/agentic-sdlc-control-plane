@@ -6,7 +6,8 @@
 - Webhook tests validate secret rejection, project allowlisting, event filtering, and durable enqueue behavior.
 - Connector tests validate Confluence URL extraction, normalized text, and embedded-image order.
 - Agent renderer tests ensure source visuals precede detailed requirement text.
-- Store integration tests validate migration, queue/outbox deduplication, concurrent lease claims, expired lease recovery, retries, and workflow uniqueness against MySQL 8.
+- Store integration tests validate migration, queue/outbox deduplication, concurrent lease claims, expired lease recovery, retries, and workflow uniqueness against PostgreSQL 16.
+- Dashboard tests verify embedded assets, GitLab Issue URL enrichment, real PostgreSQL projections, empty collections, and JavaScript syntax.
 - End-to-end staging tests use a dedicated labeled GitLab Issue and synthetic Confluence content.
 
 ## End-to-end acceptance

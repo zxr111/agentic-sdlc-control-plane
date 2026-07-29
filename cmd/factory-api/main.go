@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/config"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/dashboard"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/webhook"
 )
@@ -22,16 +23,19 @@ func main() {
 		logger.Error("configuration invalid", "error", err)
 		os.Exit(1)
 	}
-	repository, err := store.Open(cfg.MySQLDSN)
+	repository, err := store.Open(cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("database open failed", "error", err)
 		os.Exit(1)
 	}
 	defer repository.Close()
 
+	mux := http.NewServeMux()
+	mux.Handle("/", webhook.New(cfg.GitLabWebhookSecret, cfg.Projects, repository, logger).Routes())
+	dashboard.New(repository, cfg.Projects, cfg.GitLabAPIURL, logger).Register(mux)
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           webhook.New(cfg.GitLabWebhookSecret, cfg.Projects, repository, logger).Routes(),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

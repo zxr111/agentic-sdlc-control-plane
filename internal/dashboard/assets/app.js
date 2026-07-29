@@ -1,0 +1,435 @@
+(() => {
+  "use strict";
+
+  const states = [
+    ["NEW", "Intake"],
+    ["INGESTING", "Source ingest"],
+    ["REQUIREMENT_ANALYSIS", "Requirement AI"],
+    ["WAITING_REQUIREMENT_REVIEW", "Requirement gate"],
+    ["MATERIALIZING_WORK_ITEMS", "Create work"],
+    ["PRD_GENERATING", "PRD + test AI"],
+    ["WAITING_PRD_AND_TEST_REVIEW", "Planning gates"],
+    ["READY_FOR_ARCHITECTURE", "Architecture ready"]
+  ];
+
+  const stateLabels = {
+    NEW: "New",
+    INGESTING: "Reading sources",
+    REQUIREMENT_ANALYSIS: "Requirement analysis",
+    WAITING_REQUIREMENT_REVIEW: "Requirement review",
+    MATERIALIZING_WORK_ITEMS: "Creating work items",
+    PRD_GENERATING: "Generating PRD & tests",
+    WAITING_PRD_AND_TEST_REVIEW: "PRD & test review",
+    READY_FOR_ARCHITECTURE: "Ready for architecture"
+  };
+
+  const gateStates = new Set(["WAITING_REQUIREMENT_REVIEW", "WAITING_PRD_AND_TEST_REVIEW"]);
+  const app = {
+    data: null,
+    selectedID: null,
+    filter: "all",
+    query: "",
+    loading: false,
+    timer: null
+  };
+
+  const byID = id => document.getElementById(id);
+  const escapeHTML = value => String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+
+  const shortHash = value => value ? `${value.slice(0, 10)}…${value.slice(-6)}` : "Not captured";
+  const relativeTime = value => {
+    const date = new Date(value);
+    const seconds = Math.round((date.getTime() - Date.now()) / 1000);
+    const formatter = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+    const ranges = [
+      [60, "second"],
+      [60, "minute"],
+      [24, "hour"],
+      [7, "day"],
+      [4.345, "week"],
+      [12, "month"],
+      [Number.POSITIVE_INFINITY, "year"]
+    ];
+    let amount = seconds;
+    for (const [divisor, unit] of ranges) {
+      if (Math.abs(amount) < divisor) return formatter.format(Math.round(amount), unit);
+      amount /= divisor;
+    }
+    return date.toLocaleString();
+  };
+
+  const formatTime = value => new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+
+  function stateClass(state) {
+    if (gateStates.has(state)) return "gate";
+    if (state === "READY_FOR_ARCHITECTURE") return "ready";
+    return "active";
+  }
+
+  function filterWorkflows() {
+    if (!app.data) return [];
+    return app.data.workflows.filter(workflow => {
+      const haystack = `${workflow.issue_title} ${workflow.project_path} ${workflow.issue_iid}`.toLowerCase();
+      if (app.query && !haystack.includes(app.query.toLowerCase())) return false;
+      if (app.filter === "gate") return gateStates.has(workflow.state);
+      if (app.filter === "ready") return workflow.state === "READY_FOR_ARCHITECTURE";
+      if (app.filter === "active") return !gateStates.has(workflow.state) && workflow.state !== "READY_FOR_ARCHITECTURE";
+      return true;
+    });
+  }
+
+  function renderSummary() {
+    const summary = app.data.summary;
+    byID("metric-total").textContent = summary.total;
+    byID("metric-progress").textContent = summary.in_progress;
+    byID("metric-gates").textContent = summary.waiting_gates;
+    byID("metric-ready").textContent = summary.ready;
+  }
+
+  function renderWorkflowList() {
+    const workflows = filterWorkflows();
+    byID("workflow-count").textContent = workflows.length;
+    if (!workflows.length) {
+      byID("workflow-list").innerHTML = `<div class="list-placeholder">${
+        app.data.workflows.length ? "No workflow matches this view." : "No workflow has been triggered yet."
+      }</div>`;
+      return;
+    }
+    byID("workflow-list").innerHTML = workflows.map(workflow => `
+      <button class="workflow-item ${workflow.id === app.selectedID ? "is-selected" : ""}"
+        type="button" data-workflow-id="${escapeHTML(workflow.id)}">
+        <span class="workflow-item-top">
+          <span class="issue-ref">${escapeHTML(workflow.project_path || `Project ${workflow.gitlab_project_id}`)} · #${workflow.issue_iid}</span>
+          <span class="state-pill ${stateClass(workflow.state)}">${escapeHTML(stateLabels[workflow.state] || workflow.state)}</span>
+        </span>
+        <span class="workflow-title">${escapeHTML(workflow.issue_title)}</span>
+        <span class="workflow-meta">
+          <span><span class="state-dot ${stateClass(workflow.state)}"></span>Revision ${workflow.revision}</span>
+          <span>${relativeTime(workflow.updated_at)}</span>
+        </span>
+      </button>
+    `).join("");
+
+    byID("workflow-list").querySelectorAll("[data-workflow-id]").forEach(button => {
+      button.addEventListener("click", () => {
+        app.selectedID = button.dataset.workflowId;
+        renderWorkflowList();
+        renderDetail();
+      });
+    });
+  }
+
+  function renderPipeline(workflow) {
+    const current = states.findIndex(([state]) => state === workflow.state);
+    return states.map(([state, label], index) => {
+      const status = index < current ? "is-complete" : index === current ? "is-current" : "";
+      const ai = !gateStates.has(state) && state !== "READY_FOR_ARCHITECTURE" ? "is-ai" : "";
+      return `<div class="pipeline-step ${status} ${ai}" aria-label="${escapeHTML(label)}: ${
+        index < current ? "complete" : index === current ? "current" : "pending"
+      }">${escapeHTML(label)}</div>`;
+    }).join("");
+  }
+
+  function renderGates(workflow) {
+    const open = workflow.gates.filter(gate => gate.status === "OPEN");
+    if (!open.length) {
+      const recent = workflow.gates.slice(0, 3);
+      if (!recent.length) return `<div class="empty-panel">No Engineer Gate has opened yet.</div>`;
+      return recent.map(gate => `
+        <div class="gate-card">
+          <div class="panel-title-row">
+            <p class="gate-name">${escapeHTML(gate.type)} Gate · revision ${gate.revision}</p>
+            <span class="gate-status ${gate.status.toLowerCase()}">${escapeHTML(gate.status)}</span>
+          </div>
+          <span class="gate-id">${escapeHTML(gate.id)}</span>
+          <div class="gate-actions">
+            <span>${gate.decided_at ? `Decided ${relativeTime(gate.decided_at)}` : `Opened ${relativeTime(gate.opened_at)}`}</span>
+            ${gate.feedback ? `<span>Feedback recorded</span>` : ""}
+          </div>
+        </div>
+      `).join("");
+    }
+    return open.map(gate => {
+      const command = `/approve gate:${gate.id}`;
+      return `
+        <div class="gate-card">
+          <div class="panel-title-row">
+            <p class="gate-name">${escapeHTML(gate.type)} Gate · revision ${gate.revision}</p>
+            <span class="gate-status open">ENGINEER ACTION</span>
+          </div>
+          <span class="gate-id">${escapeHTML(gate.id)}</span>
+          <div class="gate-command">
+            <code>${escapeHTML(command)}</code>
+            <button class="copy-button" type="button" data-copy="${escapeHTML(command)}">Copy</button>
+          </div>
+          <div class="gate-actions">
+            <span>Reviewers: ${gate.reviewer_ids.map(id => `#${id}`).join(", ")}</span>
+            <span>Waiting ${relativeTime(gate.opened_at).replace("ago", "")}</span>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderArtifacts(workflow) {
+    if (!workflow.artifacts.length) return `<div class="empty-panel">Artifacts appear after the first Agent completes.</div>`;
+    return workflow.artifacts.map(artifact => `
+      <div class="artifact-card">
+        <div class="panel-title-row">
+          <p class="artifact-name">${escapeHTML(artifact.type.replaceAll("_", " "))}</p>
+          <span class="artifact-type">v${artifact.version}</span>
+        </div>
+        <div class="artifact-meta">
+          <span>${escapeHTML(artifact.model)}</span>
+          <span>·</span>
+          <span>${escapeHTML(artifact.prompt)}</span>
+          <span>·</span>
+          <span>${relativeTime(artifact.generated_at)}</span>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  function renderSources(workflow) {
+    if (!workflow.sources.length) return `<div class="empty-panel">Waiting for Confluence ingestion.</div>`;
+    return workflow.sources.map(source => `
+      <div class="source-card">
+        <a class="source-title" href="${escapeHTML(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(source.title)}</a>
+        <div class="source-meta">
+          <span>Page ${escapeHTML(source.page_id)}</span>
+          <span>v${source.version}</span>
+          <span>${source.image_count} visual${source.image_count === 1 ? "" : "s"}</span>
+          <span class="hash" title="${escapeHTML(source.content_hash)}">${escapeHTML(shortHash(source.content_hash))}</span>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  function describeActivity(activity) {
+    const details = activity.details || {};
+    if (activity.type === "workflow.transition") {
+      return `${details.from || "Unknown"} → ${details.to || "Unknown"}${details.reason ? ` · ${details.reason}` : ""}`;
+    }
+    if (activity.type === "gate.opened") return `${details.gate_type || "Engineer"} Gate opened`;
+    if (activity.type === "gate.decided") return `${details.gate_type || "Engineer"} Gate: ${details.action || "decision recorded"}`;
+    if (activity.type === "gate.unauthorized_attempt") return `Unauthorized Gate attempt${details.username ? ` by @${details.username}` : ""}`;
+    return Object.keys(details).length ? JSON.stringify(details) : "Recorded by Factory";
+  }
+
+  function renderActivity(workflow) {
+    if (!workflow.activity.length) return `<div class="empty-panel">No audit activity recorded.</div>`;
+    return `<div class="timeline">${workflow.activity.slice(0, 12).map(activity => `
+      <div class="timeline-item">
+        <div class="timeline-type">${escapeHTML(activity.type.replaceAll(".", " · "))}</div>
+        <div class="timeline-detail">${escapeHTML(describeActivity(activity))}</div>
+        <div class="timeline-detail">${formatTime(activity.created_at)}${activity.actor_id ? ` · actor #${activity.actor_id}` : " · AI Factory"}</div>
+      </div>
+    `).join("")}</div>`;
+  }
+
+  function renderDetail() {
+    if (!app.data) return;
+    const workflow = app.data.workflows.find(item => item.id === app.selectedID);
+    if (!workflow) {
+      byID("workflow-detail").innerHTML = `
+        <section class="empty-state">
+          <div class="empty-visual" aria-hidden="true"><span></span><span></span><span></span></div>
+          <p class="eyebrow">${app.data.workflows.length ? "No workflow selected" : "Factory is ready"}</p>
+          <h2>${app.data.workflows.length ? "Choose a workflow to inspect its journey" : "Waiting for the first intake event"}</h2>
+          <p>${app.data.workflows.length
+            ? "Inspect Agent progress, Engineer Gates, traceability, failures, and audit history."
+            : "Create an open GitLab Issue with a Confluence link and the automation::enabled label."}</p>
+        </section>`;
+      return;
+    }
+
+    const gatePanelClass = workflow.gates.some(gate => gate.status === "OPEN") ? "panel-gate" : "";
+    byID("workflow-detail").innerHTML = `
+      <header class="workflow-header">
+        <div>
+          <span class="state-pill ${stateClass(workflow.state)}">${escapeHTML(stateLabels[workflow.state] || workflow.state)}</span>
+          <h2>${escapeHTML(workflow.issue_title)}</h2>
+          <div class="detail-meta">
+            <span>${escapeHTML(workflow.project_path || `Project ${workflow.gitlab_project_id}`)} #${workflow.issue_iid}</span>
+            <span>Revision ${workflow.revision}</span>
+            <span>Updated ${relativeTime(workflow.updated_at)}</span>
+            <span class="hash">Source ${escapeHTML(shortHash(workflow.source_hash))}</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          ${workflow.issue_url ? `<a class="button button-primary" href="${escapeHTML(workflow.issue_url)}" target="_blank" rel="noopener noreferrer">Open GitLab Issue</a>` : ""}
+        </div>
+      </header>
+
+      <section class="journey" aria-label="Workflow state machine">
+        <div class="journey-label">
+          <h3>Delivery journey</h3>
+          <span>AI advances · Engineer authorizes</span>
+        </div>
+        <div class="pipeline">${renderPipeline(workflow)}</div>
+      </section>
+
+      <div class="detail-grid">
+        <div class="detail-column">
+          <section class="panel ${gatePanelClass}">
+            <div class="panel-title-row">
+              <h3>Engineer Gates</h3>
+              <span>${workflow.gates.filter(gate => gate.status === "OPEN").length} open</span>
+            </div>
+            ${renderGates(workflow)}
+          </section>
+          <section class="panel">
+            <div class="panel-title-row">
+              <h3>Agent artifacts</h3>
+              <span>${workflow.artifacts.length} latest</span>
+            </div>
+            ${renderArtifacts(workflow)}
+          </section>
+          <section class="panel">
+            <div class="panel-title-row">
+              <h3>Immutable sources</h3>
+              <span>${workflow.sources.length} page${workflow.sources.length === 1 ? "" : "s"}</span>
+            </div>
+            ${renderSources(workflow)}
+          </section>
+        </div>
+        <div class="detail-column">
+          <section class="panel">
+            <div class="panel-title-row">
+              <h3>Audit timeline</h3>
+              <span>Latest ${Math.min(workflow.activity.length, 12)}</span>
+            </div>
+            ${renderActivity(workflow)}
+          </section>
+        </div>
+      </div>
+    `;
+
+    byID("workflow-detail").querySelectorAll("[data-copy]").forEach(button => {
+      button.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(button.dataset.copy);
+          showToast("Gate command copied. Paste it into the GitLab Issue.");
+        } catch {
+          showToast("Clipboard access was denied.");
+        }
+      });
+    });
+  }
+
+  function renderOperations() {
+    const queue = app.data.queues;
+    const values = [
+      ["Events ready", queue.events_ready],
+      ["Events processing", queue.events_processing],
+      ["Events dead", queue.events_dead],
+      ["Outbox ready", queue.outbox_ready],
+      ["Outbox processing", queue.outbox_processing],
+      ["Outbox dead", queue.outbox_dead]
+    ];
+    byID("queue-grid").innerHTML = values.map(([label, value]) => `
+      <div class="queue-item">
+        <span>${label}</span>
+        <strong>${value}</strong>
+      </div>
+    `).join("");
+
+    const dead = queue.events_dead + queue.outbox_dead;
+    const status = byID("operations-status");
+    status.className = `operations-status ${dead ? "is-unhealthy" : "is-healthy"}`;
+    status.textContent = dead ? `${dead} dead item${dead === 1 ? "" : "s"} need attention` : "Queues healthy";
+
+    if (!app.data.failures.length) {
+      byID("failure-list").innerHTML = "";
+      return;
+    }
+    byID("failure-list").innerHTML = `
+      <table class="failure-table">
+        <thead><tr><th>Queue</th><th>Type</th><th>Attempts</th><th>Last error</th></tr></thead>
+        <tbody>${app.data.failures.map(failure => `
+          <tr>
+            <td><span class="queue-status dead">${escapeHTML(failure.kind)}</span></td>
+            <td>${escapeHTML(failure.type)}</td>
+            <td>${failure.attempts}</td>
+            <td>${escapeHTML(failure.last_error)}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table>`;
+  }
+
+  function render() {
+    renderSummary();
+    if (!app.selectedID && app.data.workflows.length) app.selectedID = app.data.workflows[0].id;
+    if (app.selectedID && !app.data.workflows.some(workflow => workflow.id === app.selectedID)) {
+      app.selectedID = app.data.workflows[0]?.id || null;
+    }
+    renderWorkflowList();
+    renderDetail();
+    renderOperations();
+  }
+
+  function setConnection(state, label) {
+    const element = byID("connection");
+    element.className = `connection ${state ? `is-${state}` : ""}`;
+    byID("connection-text").textContent = label;
+  }
+
+  async function load() {
+    if (app.loading) return;
+    app.loading = true;
+    byID("refresh-button").disabled = true;
+    setConnection("", "Syncing");
+    try {
+      const response = await fetch("/api/dashboard", {
+        headers: { Accept: "application/json" },
+        cache: "no-store"
+      });
+      if (!response.ok) throw new Error(`Dashboard returned ${response.status}`);
+      app.data = await response.json();
+      render();
+      setConnection("online", "Live");
+      byID("updated-at").textContent = `Updated ${relativeTime(app.data.generated_at)}`;
+    } catch (error) {
+      setConnection("offline", "Disconnected");
+      byID("updated-at").textContent = error.message;
+      showToast("Could not refresh Factory data.");
+    } finally {
+      app.loading = false;
+      byID("refresh-button").disabled = false;
+    }
+  }
+
+  function showToast(message) {
+    const toast = byID("toast");
+    toast.textContent = message;
+    toast.classList.add("is-visible");
+    window.clearTimeout(showToast.timer);
+    showToast.timer = window.setTimeout(() => toast.classList.remove("is-visible"), 2600);
+  }
+
+  byID("refresh-button").addEventListener("click", load);
+  byID("search-input").addEventListener("input", event => {
+    app.query = event.target.value.trim();
+    renderWorkflowList();
+  });
+  document.querySelectorAll("[data-filter]").forEach(button => {
+    button.addEventListener("click", () => {
+      app.filter = button.dataset.filter;
+      document.querySelectorAll("[data-filter]").forEach(item => item.classList.toggle("is-active", item === button));
+      renderWorkflowList();
+    });
+  });
+
+  load();
+  app.timer = window.setInterval(load, 10000);
+})();

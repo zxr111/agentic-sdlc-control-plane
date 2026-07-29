@@ -9,5 +9,7 @@
 - OpenAI requests use `store: false` and a hashed safety identifier. Prompts explicitly distinguish authoritative data from executable instructions.
 - The Kubernetes workload runs as a non-root UID, drops Linux capabilities, uses a read-only root filesystem, and has no service-account token.
 - V1 has no source repository write, merge, CI mutation, application deployment, production database, or production cluster credential.
+- The Control Room is read-only and has no endpoint for Gate decisions, retries, state changes, code execution, or deployment.
+- The test Ingress does not expose `/dashboard/` or `/api/dashboard`. The User Center browser reaches only its authenticated, administrator-only Hermes proxy and never receives an upstream credential.
 
-The NetworkPolicy permits webhook ingress only from the configured ingress namespace and limits egress to DNS, HTTPS, and MySQL ports. Cluster-specific endpoints must be verified before applying it.
+The NetworkPolicy permits webhook ingress from the configured ingress namespace and internal Dashboard API access only from Pods labeled `app=argus-hermes-api` in the `argus-test` namespace. Egress is limited to DNS, HTTPS, and PostgreSQL ports. Cluster-specific endpoints and namespace labels must be verified before applying it.

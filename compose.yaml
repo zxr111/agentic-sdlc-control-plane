@@ -1,19 +1,78 @@
+x-factory-environment: &factory-environment
+  DATABASE_URL: postgres://factory:factory@postgres:5432/ai_sdlc_factory_test?sslmode=disable
+  FACTORY_PROJECTS_FILE: /etc/factory/projects.json
+  GITLAB_API_URL: ${GITLAB_API_URL:-https://git.kuainiujinke.com/api/v4}
+  GITLAB_API_TOKEN: ${GITLAB_API_TOKEN:?GITLAB_API_TOKEN is required}
+  GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:?GITLAB_WEBHOOK_SECRET is required}
+  CONFLUENCE_BASE_URL: ${CONFLUENCE_BASE_URL:-https://kylith.atlassian.net}
+  CONFLUENCE_EMAIL: ${CONFLUENCE_EMAIL:?CONFLUENCE_EMAIL is required}
+  CONFLUENCE_API_TOKEN: ${CONFLUENCE_API_TOKEN:?CONFLUENCE_API_TOKEN is required}
+  OPENAI_API_URL: ${OPENAI_API_URL:-https://api.openai.com/v1}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
+
+x-factory-service: &factory-service
+  image: ai-sdlc-factory:local
+  build:
+    context: .
+  environment: *factory-environment
+  volumes:
+    - ./deploy/overlays/test/projects.json:/etc/factory/projects.json:ro
+  restart: unless-stopped
+
 services:
-  mysql:
-    image: mysql:8.4
+  postgres:
+    image: postgres:16-alpine
     environment:
-      MYSQL_DATABASE: ai_sdlc_factory_test
-      MYSQL_USER: factory
-      MYSQL_PASSWORD: factory
-      MYSQL_ROOT_PASSWORD: root
+      POSTGRES_DB: ai_sdlc_factory_test
+      POSTGRES_USER: factory
+      POSTGRES_PASSWORD: factory
       TZ: UTC
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_0900_ai_ci
     ports:
-      - "3307:3306"
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      test: ["CMD-SHELL", "pg_isready -U factory -d ai_sdlc_factory_test"]
       interval: 2s
       timeout: 2s
       retries: 30
+
+  migrate:
+    image: ai-sdlc-factory:local
+    build:
+      context: .
+    command: ["/usr/local/bin/factory-migrate"]
+    environment:
+      DATABASE_URL: postgres://factory:factory@postgres:5432/ai_sdlc_factory_test?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *factory-service
+    command: ["/usr/local/bin/factory-api"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    <<: *factory-service
+    command: ["/usr/local/bin/factory-worker"]
+    environment:
+      <<: *factory-environment
+      WORKER_ID: compose-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:
