@@ -11,4 +11,4 @@ RUN apk add --no-cache ca-certificates tzdata \
     && adduser -S -G factory -u 10001 factory
 COPY --from=build /out/factory-* /usr/local/bin/
 USER 10001
-ENTRYPOINT ["/usr/local/bin/factory-api"]
+CMD ["/usr/local/bin/factory-api"]

@@ -11,12 +11,12 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	dsn := os.Getenv("MYSQL_DSN")
-	if dsn == "" {
-		logger.Error("MYSQL_DSN is required")
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		logger.Error("DATABASE_URL is required")
 		os.Exit(1)
 	}
-	repository, err := store.Open(dsn)
+	repository, err := store.Open(databaseURL)
 	if err != nil {
 		logger.Error("database open failed", "error", err)
 		os.Exit(1)

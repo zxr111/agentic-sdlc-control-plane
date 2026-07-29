@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- MySQL 8.0+ InnoDB database `ai_sdlc_factory_test`; do not reuse an Argus application schema.
+- PostgreSQL 14+ database `ai_sdlc_factory_test`; do not reuse an Argus application schema or database role.
 - An ACK namespace named `ai-factory-test`.
 - A project-scoped GitLab bot token with only the API access needed for Issues, notes, uploads, and membership checks.
 - A read-only Confluence service account.
@@ -22,7 +22,7 @@ Use a secret manager or protected, masked, hidden GitLab CI variables. Never com
 
 ```bash
 kubectl -n ai-factory-test create secret generic ai-sdlc-factory-secrets \
-  --from-literal=MYSQL_DSN="$MYSQL_DSN" \
+  --from-literal=DATABASE_URL="$DATABASE_URL" \
   --from-literal=GITLAB_API_TOKEN="$GITLAB_API_TOKEN" \
   --from-literal=GITLAB_WEBHOOK_SECRET="$GITLAB_WEBHOOK_SECRET" \
   --from-literal=CONFLUENCE_EMAIL="$CONFLUENCE_EMAIL" \
@@ -34,9 +34,9 @@ Configure `OPENAI_API_KEY` as Masked and Hidden before deployment. Rotate any ke
 
 ## Deployment
 
-The pipeline always compiles deployable Linux binaries. After dedicated registry variables are verified, set `ENABLE_TEST_IMAGE_PUBLISH=true` to enable image publication. After every deployment prerequisite is verified, set `ENABLE_TEST_DEPLOY=true`; `deploy_test` still remains a manual Engineer Gate. It creates the image-pull Secret, applies runtime Secrets, runs the migration Job, and then waits for API and worker rollouts. The migration process uses a MySQL advisory migration lock and idempotent DDL.
+The pipeline always compiles deployable Linux binaries. After dedicated registry variables are verified, set `ENABLE_TEST_IMAGE_PUBLISH=true` to enable image publication. After every deployment prerequisite is verified, set `ENABLE_TEST_DEPLOY=true`; `deploy_test` still remains a manual Engineer Gate. It creates the image-pull Secret, applies runtime Secrets, runs the migration Job, and then waits for API and worker rollouts. The migration process uses a PostgreSQL advisory lock and transactional, idempotent DDL.
 
-Before first deployment, verify the ingress class, hostname, TLS secret, registry pull secret, MySQL network route, and NetworkPolicy namespace selectors against the test cluster.
+Before first deployment, verify the ingress class, hostname, TLS secret, registry pull secret, PostgreSQL network route, TLS mode, and NetworkPolicy namespace selectors against the test cluster.
 
 ## GitLab webhook
 
@@ -55,4 +55,4 @@ Do not enable Push, Merge Request, Pipeline, Deployment, or Job events in V1.
 - A transient connector/model failure retries with exponential backoff up to eight attempts.
 - Dead records remain queryable for manual diagnosis; do not delete audit records to force a retry.
 - The ten-minute reconciliation event scans waiting workflows for valid Gate commands that may have missed webhook delivery.
-- Restoring MySQL restores workflow state; GitLab writes are replay-safe through stable markers and deterministic child-Issue markers.
+- Restoring PostgreSQL restores workflow state; GitLab writes are replay-safe through stable markers and deterministic child-Issue markers.

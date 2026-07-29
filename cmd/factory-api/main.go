@@ -22,7 +22,7 @@ func main() {
 		logger.Error("configuration invalid", "error", err)
 		os.Exit(1)
 	}
-	repository, err := store.Open(cfg.MySQLDSN)
+	repository, err := store.Open(cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("database open failed", "error", err)
 		os.Exit(1)

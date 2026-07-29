@@ -10,4 +10,4 @@
 - The Kubernetes workload runs as a non-root UID, drops Linux capabilities, uses a read-only root filesystem, and has no service-account token.
 - V1 has no source repository write, merge, CI mutation, application deployment, production database, or production cluster credential.
 
-The NetworkPolicy permits webhook ingress only from the configured ingress namespace and limits egress to DNS, HTTPS, and MySQL ports. Cluster-specific endpoints must be verified before applying it.
+The NetworkPolicy permits webhook ingress only from the configured ingress namespace and limits egress to DNS, HTTPS, and PostgreSQL ports. Cluster-specific endpoints must be verified before applying it.

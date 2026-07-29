@@ -31,7 +31,7 @@ Source changes invalidate downstream approval and return the workflow to `INGEST
 - `outbox_messages`: idempotent GitLab comments and child-Issue writes.
 - `audit_events`: state, Gate, authorization, and intake evidence.
 
-String identifiers used for idempotency are stored with binary collations. All timestamps use UTC `DATETIME(6)`. JSON is used only for structured payloads; workflow routing fields remain indexed columns.
+String identifiers used for idempotency use deterministic `C` collation. All timestamps use `TIMESTAMPTZ(6)` and are handled as UTC. Flexible payloads use `JSONB`; workflow routing fields remain indexed relational columns.
 
 ## Connector behavior
 

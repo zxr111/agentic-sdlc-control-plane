@@ -14,7 +14,7 @@ import (
 
 type Config struct {
 	HTTPAddr            string
-	MySQLDSN            string
+	DatabaseURL         string
 	GitLabAPIURL        string
 	GitLabToken         string
 	GitLabWebhookSecret string
@@ -35,7 +35,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr:            env("HTTP_ADDR", ":8080"),
-		MySQLDSN:            os.Getenv("MYSQL_DSN"),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
 		GitLabAPIURL:        strings.TrimRight(env("GITLAB_API_URL", "https://git.kuainiujinke.com/api/v4"), "/"),
 		GitLabToken:         os.Getenv("GITLAB_API_TOKEN"),
 		ConfluenceBaseURL:   strings.TrimRight(env("CONFLUENCE_BASE_URL", "https://kylith.atlassian.net"), "/"),
@@ -62,7 +62,7 @@ func Load() (Config, error) {
 
 func (c Config) Validate() error {
 	required := map[string]string{
-		"MYSQL_DSN":             c.MySQLDSN,
+		"DATABASE_URL":          c.DatabaseURL,
 		"GITLAB_API_TOKEN":      c.GitLabToken,
 		"GITLAB_WEBHOOK_SECRET": c.GitLabWebhookSecret,
 		"CONFLUENCE_EMAIL":      c.ConfluenceEmail,
