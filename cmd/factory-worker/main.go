@@ -12,6 +12,7 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/agents"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/config"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/confluence"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/delivery"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/engine"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
@@ -38,6 +39,9 @@ func main() {
 		cfg.Projects,
 		logger,
 	)
+	if cfg.DeliveryTriggerURL != "" {
+		runner.SetDeliveryClient(delivery.New(cfg.DeliveryTriggerURL, cfg.DeliveryTriggerToken))
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	logger.Info("factory worker started", "worker_id", cfg.WorkerID)

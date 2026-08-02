@@ -3,16 +3,30 @@
     "gitlab_project_id": 3533,
     "path": "argus/argus-server",
     "enabled_label": "automation::enabled",
-    "module": "PID",
+    "module": "argus-server",
+    "full_lifecycle": true,
+    "default_branch": "master",
+    "integration_branch": true,
+    "production_enabled": false,
     "reviewer_ids": {
       "REQUIREMENT": [995],
       "PRD": [995],
-      "TEST": [995]
+      "TEST": [995],
+      "ARCHITECTURE": [995],
+      "CODE_REVIEW": [995],
+      "RELEASE": [995],
+      "INCIDENT": [995],
+      "PRODUCTION_MIGRATION": [995]
     },
     "reviewer_mentions": {
       "REQUIREMENT": ["brucegong"],
       "PRD": ["brucegong"],
-      "TEST": ["brucegong"]
+      "TEST": ["brucegong"],
+      "ARCHITECTURE": ["brucegong"],
+      "CODE_REVIEW": ["brucegong"],
+      "RELEASE": ["brucegong"],
+      "INCIDENT": ["brucegong"],
+      "PRODUCTION_MIGRATION": ["brucegong"]
     },
     "owner_ids": {
       "requirements": 995,

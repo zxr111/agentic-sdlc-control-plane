@@ -13,43 +13,49 @@ import (
 )
 
 type Config struct {
-	HTTPAddr            string
-	DatabaseURL         string
-	GitLabAPIURL        string
-	GitLabToken         string
-	GitLabWebhookSecret string
-	ConfluenceBaseURL   string
-	ConfluenceEmail     string
-	ConfluenceToken     string
-	OpenAIAPIURL        string
-	OpenAIAPIKey        string
-	OpenAIModel         string
-	WorkerID            string
-	WorkerPollInterval  time.Duration
-	LeaseDuration       time.Duration
-	ReconcileInterval   time.Duration
-	MaxAttempts         int
-	Projects            map[int64]domain.ProjectConfig
+	HTTPAddr             string
+	DatabaseURL          string
+	GitLabAPIURL         string
+	GitLabToken          string
+	GitLabWebhookSecret  string
+	CallbackSharedSecret string
+	ConfluenceBaseURL    string
+	ConfluenceEmail      string
+	ConfluenceToken      string
+	OpenAIAPIURL         string
+	OpenAIAPIKey         string
+	OpenAIModel          string
+	DeliveryTriggerURL   string
+	DeliveryTriggerToken string
+	WorkerID             string
+	WorkerPollInterval   time.Duration
+	LeaseDuration        time.Duration
+	ReconcileInterval    time.Duration
+	MaxAttempts          int
+	Projects             map[int64]domain.ProjectConfig
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:            env("HTTP_ADDR", ":8080"),
-		DatabaseURL:         os.Getenv("DATABASE_URL"),
-		GitLabAPIURL:        strings.TrimRight(env("GITLAB_API_URL", "https://git.kuainiujinke.com/api/v4"), "/"),
-		GitLabToken:         os.Getenv("GITLAB_API_TOKEN"),
-		ConfluenceBaseURL:   strings.TrimRight(env("CONFLUENCE_BASE_URL", "https://kylith.atlassian.net"), "/"),
-		ConfluenceEmail:     os.Getenv("CONFLUENCE_EMAIL"),
-		ConfluenceToken:     os.Getenv("CONFLUENCE_API_TOKEN"),
-		OpenAIAPIURL:        strings.TrimRight(env("OPENAI_API_URL", "https://api.openai.com/v1"), "/"),
-		OpenAIAPIKey:        os.Getenv("OPENAI_API_KEY"),
-		OpenAIModel:         env("OPENAI_MODEL", "gpt-5.6-terra"),
-		GitLabWebhookSecret: os.Getenv("GITLAB_WEBHOOK_SECRET"),
-		WorkerID:            env("WORKER_ID", hostname()),
-		WorkerPollInterval:  durationEnv("WORKER_POLL_INTERVAL", time.Second),
-		LeaseDuration:       durationEnv("WORKER_LEASE_DURATION", 2*time.Minute),
-		ReconcileInterval:   durationEnv("RECONCILE_INTERVAL", 10*time.Minute),
-		MaxAttempts:         intEnv("MAX_ATTEMPTS", 8),
+		HTTPAddr:             env("HTTP_ADDR", ":8080"),
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		GitLabAPIURL:         strings.TrimRight(env("GITLAB_API_URL", "https://git.kuainiujinke.com/api/v4"), "/"),
+		GitLabToken:          os.Getenv("GITLAB_API_TOKEN"),
+		ConfluenceBaseURL:    strings.TrimRight(env("CONFLUENCE_BASE_URL", "https://kylith.atlassian.net"), "/"),
+		ConfluenceEmail:      os.Getenv("CONFLUENCE_EMAIL"),
+		ConfluenceToken:      os.Getenv("CONFLUENCE_API_TOKEN"),
+		OpenAIAPIURL:         strings.TrimRight(env("OPENAI_API_URL", "https://api.openai.com/v1"), "/"),
+		OpenAIAPIKey:         os.Getenv("OPENAI_API_KEY"),
+		OpenAIModel:          env("OPENAI_MODEL", "gpt-5.6-terra"),
+		DeliveryTriggerURL:   strings.TrimSpace(os.Getenv("DELIVERY_TRIGGER_URL")),
+		DeliveryTriggerToken: strings.TrimSpace(os.Getenv("DELIVERY_TRIGGER_TOKEN")),
+		GitLabWebhookSecret:  os.Getenv("GITLAB_WEBHOOK_SECRET"),
+		CallbackSharedSecret: os.Getenv("CALLBACK_SHARED_SECRET"),
+		WorkerID:             env("WORKER_ID", hostname()),
+		WorkerPollInterval:   durationEnv("WORKER_POLL_INTERVAL", time.Second),
+		LeaseDuration:        durationEnv("WORKER_LEASE_DURATION", 2*time.Minute),
+		ReconcileInterval:    durationEnv("RECONCILE_INTERVAL", 10*time.Minute),
+		MaxAttempts:          intEnv("MAX_ATTEMPTS", 8),
 	}
 
 	projects, err := loadProjects()
@@ -62,12 +68,13 @@ func Load() (Config, error) {
 
 func (c Config) Validate() error {
 	required := map[string]string{
-		"DATABASE_URL":          c.DatabaseURL,
-		"GITLAB_API_TOKEN":      c.GitLabToken,
-		"GITLAB_WEBHOOK_SECRET": c.GitLabWebhookSecret,
-		"CONFLUENCE_EMAIL":      c.ConfluenceEmail,
-		"CONFLUENCE_API_TOKEN":  c.ConfluenceToken,
-		"OPENAI_API_KEY":        c.OpenAIAPIKey,
+		"DATABASE_URL":           c.DatabaseURL,
+		"GITLAB_API_TOKEN":       c.GitLabToken,
+		"GITLAB_WEBHOOK_SECRET":  c.GitLabWebhookSecret,
+		"CALLBACK_SHARED_SECRET": c.CallbackSharedSecret,
+		"CONFLUENCE_EMAIL":       c.ConfluenceEmail,
+		"CONFLUENCE_API_TOKEN":   c.ConfluenceToken,
+		"OPENAI_API_KEY":         c.OpenAIAPIKey,
 	}
 	var missing []string
 	for name, value := range required {
@@ -80,6 +87,9 @@ func (c Config) Validate() error {
 	}
 	if len(c.Projects) == 0 {
 		return errors.New("no projects configured")
+	}
+	if (c.DeliveryTriggerURL == "") != (c.DeliveryTriggerToken == "") {
+		return errors.New("DELIVERY_TRIGGER_URL and DELIVERY_TRIGGER_TOKEN must be configured together")
 	}
 	return nil
 }

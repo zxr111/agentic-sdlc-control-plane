@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,19 +22,27 @@ type EventWriter interface {
 }
 
 type Handler struct {
-	secret   string
-	projects map[int64]domain.ProjectConfig
-	store    EventWriter
-	logger   *slog.Logger
+	secret         string
+	callbackSecret string
+	projects       map[int64]domain.ProjectConfig
+	store          EventWriter
+	logger         *slog.Logger
 }
 
 func New(secret string, projects map[int64]domain.ProjectConfig, store EventWriter, logger *slog.Logger) *Handler {
-	return &Handler{secret: secret, projects: projects, store: store, logger: logger}
+	return NewWithCallbackSecret(secret, secret, projects, store, logger)
+}
+
+func NewWithCallbackSecret(secret, callbackSecret string, projects map[int64]domain.ProjectConfig, store EventWriter, logger *slog.Logger) *Handler {
+	return &Handler{secret: secret, callbackSecret: callbackSecret, projects: projects, store: store, logger: logger}
 }
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /webhooks/gitlab", h.gitLab)
+	mux.HandleFunc("POST /callbacks/jenkins", h.externalCallback("jenkins"))
+	mux.HandleFunc("POST /callbacks/monitoring", h.externalCallback("monitoring"))
+	mux.HandleFunc("POST /callbacks/quality", h.externalCallback("quality"))
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
@@ -71,7 +80,17 @@ type gitLabEnvelope struct {
 		Action       string `json:"action"`
 		Note         string `json:"note"`
 		NoteableType string `json:"noteable_type"`
-		Labels       []struct {
+		State        string `json:"state"`
+		Status       string `json:"status"`
+		Ref          string `json:"ref"`
+		SHA          string `json:"sha"`
+		SourceBranch string `json:"source_branch"`
+		TargetBranch string `json:"target_branch"`
+		LastCommit   struct {
+			ID string `json:"id"`
+		} `json:"last_commit"`
+		URL    string `json:"url"`
+		Labels []struct {
 			Title string `json:"title"`
 		} `json:"labels"`
 	} `json:"object_attributes"`
@@ -90,13 +109,64 @@ type IssueChanged struct {
 }
 
 type GateNote struct {
-	ProjectID int64              `json:"project_id"`
-	IssueIID  int64              `json:"issue_iid"`
-	NoteID    int64              `json:"note_id"`
-	UserID    int64              `json:"user_id"`
-	Username  string             `json:"username"`
-	Command   domain.GateCommand `json:"command"`
-	EventID   string             `json:"event_id"`
+	ProjectID      int64              `json:"project_id"`
+	IssueIID       int64              `json:"issue_iid"`
+	NoteID         int64              `json:"note_id"`
+	UserID         int64              `json:"user_id"`
+	Username       string             `json:"username"`
+	Command        domain.GateCommand `json:"command"`
+	EventID        string             `json:"event_id"`
+	EmailRelayHash string             `json:"email_relay_hash,omitempty"`
+}
+
+type ControlNote struct {
+	ProjectID      int64                 `json:"project_id"`
+	IssueIID       int64                 `json:"issue_iid"`
+	NoteID         int64                 `json:"note_id"`
+	UserID         int64                 `json:"user_id"`
+	Username       string                `json:"username"`
+	Command        domain.ControlCommand `json:"command"`
+	EventID        string                `json:"event_id"`
+	EmailRelayHash string                `json:"email_relay_hash,omitempty"`
+}
+
+var emailRelayMarker = regexp.MustCompile(`<!-- ai-factory:email-relay:([a-f0-9]{64}) -->`)
+
+type LifecycleEvent struct {
+	ProjectID       int64  `json:"project_id"`
+	ObjectKind      string `json:"object_kind"`
+	ObjectID        int64  `json:"object_id"`
+	IssueIID        int64  `json:"issue_iid"`
+	MergeRequestIID int64  `json:"merge_request_iid"`
+	Action          string `json:"action"`
+	State           string `json:"state"`
+	Status          string `json:"status"`
+	SourceBranch    string `json:"source_branch"`
+	TargetBranch    string `json:"target_branch"`
+	SHA             string `json:"sha"`
+	URL             string `json:"url"`
+	UserID          int64  `json:"user_id"`
+	Username        string `json:"username"`
+	EventID         string `json:"event_id"`
+}
+
+type ExternalCallback struct {
+	Source                      string          `json:"source"`
+	ExternalID                  string          `json:"external_id"`
+	ProjectID                   int64           `json:"project_id"`
+	WorkflowID                  string          `json:"workflow_id"`
+	WorkItemID                  string          `json:"work_item_id"`
+	IssueIID                    int64           `json:"issue_iid"`
+	Severity                    string          `json:"severity"`
+	Status                      string          `json:"status"`
+	Title                       string          `json:"title"`
+	Environment                 string          `json:"environment"`
+	CommitSHA                   string          `json:"commit_sha"`
+	RequiresProductionMigration bool            `json:"requires_production_migration"`
+	MigrationPlan               string          `json:"migration_plan"`
+	RollbackPlan                string          `json:"rollback_plan"`
+	ChangeWindow                string          `json:"change_window"`
+	Payload                     json.RawMessage `json:"payload"`
 }
 
 func (h *Handler) gitLab(writer http.ResponseWriter, request *http.Request) {
@@ -105,7 +175,11 @@ func (h *Handler) gitLab(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	eventName := request.Header.Get("X-Gitlab-Event")
-	if eventName != "Issue Hook" && eventName != "Note Hook" {
+	enabledEvents := map[string]bool{
+		"Issue Hook": true, "Note Hook": true, "Merge Request Hook": true,
+		"Pipeline Hook": true, "Job Hook": true, "Deployment Hook": true, "Push Hook": true,
+	}
+	if !enabledEvents[eventName] {
 		http.Error(writer, "event type is not enabled", http.StatusBadRequest)
 		return
 	}
@@ -139,24 +213,58 @@ func (h *Handler) gitLab(writer http.ResponseWriter, request *http.Request) {
 		}
 		err = h.store.EnqueueEvent(request.Context(), "gitlab:"+eventID, "gitlab.issue.changed", event, time.Now().UTC())
 	case "Note Hook":
-		if envelope.ObjectAttributes.NoteableType != "Issue" {
+		if envelope.ObjectAttributes.NoteableType != "Issue" && envelope.ObjectAttributes.NoteableType != "MergeRequest" {
 			writer.WriteHeader(http.StatusNoContent)
 			return
 		}
 		command, parseErr := domain.ParseGateCommand(envelope.ObjectAttributes.Note)
-		if parseErr != nil {
-			writer.WriteHeader(http.StatusNoContent)
-			return
-		}
 		issueIID := envelope.Issue.IID
 		if issueIID == 0 {
 			issueIID = envelope.ObjectAttributes.NoteableIID
 		}
-		event := GateNote{
-			ProjectID: envelope.Project.ID, IssueIID: issueIID, NoteID: envelope.ObjectAttributes.ID,
-			UserID: envelope.User.ID, Username: envelope.User.Username, Command: command, EventID: eventID,
+		if parseErr == nil {
+			relayHash := ""
+			if match := emailRelayMarker.FindStringSubmatch(envelope.ObjectAttributes.Note); match != nil {
+				relayHash = match[1]
+			}
+			event := GateNote{
+				ProjectID: envelope.Project.ID, IssueIID: issueIID, NoteID: envelope.ObjectAttributes.ID,
+				UserID: envelope.User.ID, Username: envelope.User.Username, Command: command, EventID: eventID,
+				EmailRelayHash: relayHash,
+			}
+			err = h.store.EnqueueEvent(request.Context(), "gitlab:"+eventID, "gitlab.gate.command", event, time.Now().UTC())
+			break
 		}
-		err = h.store.EnqueueEvent(request.Context(), "gitlab:"+eventID, "gitlab.gate.command", event, time.Now().UTC())
+		control, controlErr := domain.ParseControlCommand(envelope.ObjectAttributes.Note)
+		if controlErr != nil {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		event := ControlNote{
+			ProjectID: envelope.Project.ID, IssueIID: issueIID, NoteID: envelope.ObjectAttributes.ID,
+			UserID: envelope.User.ID, Username: envelope.User.Username, Command: control, EventID: eventID,
+		}
+		if match := emailRelayMarker.FindStringSubmatch(envelope.ObjectAttributes.Note); match != nil {
+			event.EmailRelayHash = match[1]
+		}
+		err = h.store.EnqueueEvent(request.Context(), "gitlab:"+eventID, "gitlab.control.command", event, time.Now().UTC())
+	default:
+		lifecycle := LifecycleEvent{
+			ProjectID: envelope.Project.ID, ObjectKind: envelope.ObjectKind,
+			ObjectID: envelope.ObjectAttributes.ID, IssueIID: envelope.Issue.IID,
+			MergeRequestIID: envelope.ObjectAttributes.IID, Action: envelope.ObjectAttributes.Action,
+			State: envelope.ObjectAttributes.State, Status: envelope.ObjectAttributes.Status,
+			SourceBranch: envelope.ObjectAttributes.SourceBranch, TargetBranch: envelope.ObjectAttributes.TargetBranch,
+			SHA: envelope.ObjectAttributes.LastCommit.ID, URL: envelope.ObjectAttributes.URL,
+			UserID: envelope.User.ID, Username: envelope.User.Username, EventID: eventID,
+		}
+		if lifecycle.SourceBranch == "" {
+			lifecycle.SourceBranch = envelope.ObjectAttributes.Ref
+		}
+		if lifecycle.SHA == "" {
+			lifecycle.SHA = envelope.ObjectAttributes.SHA
+		}
+		err = h.store.EnqueueEvent(request.Context(), "gitlab:"+eventID, "gitlab.lifecycle", lifecycle, time.Now().UTC())
 	}
 	if err != nil {
 		h.logger.Error("webhook enqueue failed", "event_id", eventID, "error", err)
@@ -164,6 +272,41 @@ func (h *Handler) gitLab(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writer.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) externalCallback(source string) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if !secureEqual(request.Header.Get("X-AI-Factory-Token"), h.callbackSecret) {
+			http.Error(writer, "invalid callback token", http.StatusUnauthorized)
+			return
+		}
+		var callback ExternalCallback
+		if err := json.NewDecoder(io.LimitReader(request.Body, 2<<20)).Decode(&callback); err != nil {
+			http.Error(writer, "invalid callback body", http.StatusBadRequest)
+			return
+		}
+		callback.Source = source
+		if callback.ExternalID == "" {
+			http.Error(writer, "external_id is required", http.StatusBadRequest)
+			return
+		}
+		if callback.ProjectID != 0 {
+			if _, ok := h.projects[callback.ProjectID]; !ok {
+				http.Error(writer, "project is not configured", http.StatusForbidden)
+				return
+			}
+		}
+		eventType := "external.delivery"
+		if source == "monitoring" {
+			eventType = "external.incident"
+		}
+		if err := h.store.EnqueueEvent(request.Context(), source+":"+callback.ExternalID+":"+callback.Status,
+			eventType, callback, time.Now().UTC()); err != nil {
+			http.Error(writer, "event could not be persisted", http.StatusInternalServerError)
+			return
+		}
+		writer.WriteHeader(http.StatusAccepted)
+	}
 }
 
 func hasLabel(envelope gitLabEnvelope, expected string) bool {

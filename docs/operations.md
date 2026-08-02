@@ -25,12 +25,31 @@ kubectl -n ai-factory-test create secret generic ai-sdlc-factory-secrets \
   --from-literal=DATABASE_URL="$DATABASE_URL" \
   --from-literal=GITLAB_API_TOKEN="$GITLAB_API_TOKEN" \
   --from-literal=GITLAB_WEBHOOK_SECRET="$GITLAB_WEBHOOK_SECRET" \
+  --from-literal=CALLBACK_SHARED_SECRET="$CALLBACK_SHARED_SECRET" \
   --from-literal=CONFLUENCE_EMAIL="$CONFLUENCE_EMAIL" \
   --from-literal=CONFLUENCE_API_TOKEN="$CONFLUENCE_API_TOKEN" \
   --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY"
 ```
 
 Configure `OPENAI_API_KEY` as Masked and Hidden before deployment. Rotate any key that has appeared in terminal output, CI logs, Issue text, or chat.
+
+For end-to-end delivery, configure `DELIVERY_TRIGGER_URL` and `DELIVERY_TRIGGER_TOKEN` together. The fixed adapter endpoint receives idempotent `release_ci`, `staging_deploy`, `staging_verify`, and conditionally `production_deploy` requests. It must return progress through the authenticated Jenkins callback. Do not accept a client-supplied adapter URL.
+
+The `staging_verified` callback must declare whether production data or schema migration is required. When it is required, both plans are mandatory and Factory opens a Production Migration Gate before it opens the separate Release Gate:
+
+```json
+{
+  "external_id": "verify-123",
+  "project_id": 3533,
+  "workflow_id": "<workflow-uuid>",
+  "status": "staging_verified",
+  "commit_sha": "<40-character-sha>",
+  "requires_production_migration": true,
+  "migration_plan": "Exact reviewed migration procedure",
+  "rollback_plan": "Exact tested rollback procedure",
+  "change_window": "2026-08-01T01:00:00Z"
+}
+```
 
 ## Deployment
 
@@ -46,10 +65,16 @@ Create one project webhook after the API is healthy:
 
 - URL: `https://ai-factory-test.kuainiu.io/webhooks/gitlab`
 - Secret token: the exact `GITLAB_WEBHOOK_SECRET` stored in Kubernetes
-- Events: Issues and Comments only
+- Events: Issues, Comments, Merge requests, Pushes, Pipelines, Jobs, and Deployments
 - SSL verification: enabled
 
-Do not enable Push, Merge Request, Pipeline, Deployment, or Job events in V1.
+Configure authenticated callbacks with the separate `CALLBACK_SHARED_SECRET`:
+
+- `/callbacks/quality`: structured evidence from the independent visible Codex Quality task.
+- `/callbacks/jenkins`: release CI, staging, production, and observation status.
+- `/callbacks/monitoring`: Sentry or Alertmanager incident intake.
+
+The callback secret is test-only and must not be reused as the GitLab webhook secret.
 
 ## Recovery
 
@@ -57,4 +82,5 @@ Do not enable Push, Merge Request, Pipeline, Deployment, or Job events in V1.
 - A transient connector/model failure retries with exponential backoff up to eight attempts.
 - Dead records remain queryable for manual diagnosis; do not delete audit records to force a retry.
 - The ten-minute reconciliation event scans waiting workflows for valid Gate commands that may have missed webhook delivery.
+- Engineer Codex Dispatchers query GitLab directly every ten minutes. They do not depend on email discovery and do not run code inside the heartbeat.
 - Restoring PostgreSQL restores workflow state; GitLab writes are replay-safe through stable markers and deterministic child-Issue markers.

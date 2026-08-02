@@ -50,6 +50,36 @@ type DashboardWorkflow struct {
 	Artifacts       []DashboardArtifact `json:"artifacts"`
 	Sources         []DashboardSource   `json:"sources"`
 	Activity        []DashboardActivity `json:"activity"`
+	WorkItems       []DashboardWorkItem `json:"work_items"`
+	AgentRuns       []DashboardAgentRun `json:"agent_runs"`
+}
+
+type DashboardAgentRun struct {
+	ID          string     `json:"id"`
+	WorkItemID  string     `json:"work_item_id,omitempty"`
+	AgentType   string     `json:"agent_type"`
+	RunNumber   int        `json:"run_number"`
+	Status      string     `json:"status"`
+	Model       string     `json:"model"`
+	ErrorSummary string    `json:"error_summary,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+}
+
+type DashboardWorkItem struct {
+	ID              string               `json:"id"`
+	Key             string               `json:"key"`
+	IssueIID        int64                `json:"issue_iid"`
+	Title           string               `json:"title"`
+	State           domain.WorkItemState `json:"state"`
+	AssigneeID      int64                `json:"assignee_id"`
+	BranchName      string               `json:"branch_name"`
+	TargetBranch    string               `json:"target_branch"`
+	DispatchID      string               `json:"dispatch_id,omitempty"`
+	DispatchClient  string               `json:"dispatch_client,omitempty"`
+	MergeRequestIID int64                `json:"merge_request_iid,omitempty"`
+	MergeRequestSHA string               `json:"merge_request_sha,omitempty"`
+	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
 type DashboardGate struct {
@@ -126,6 +156,12 @@ func (s *Store) Dashboard(ctx context.Context, limit int) (DashboardData, error)
 	if err := s.loadDashboardActivity(ctx, &result, limit); err != nil {
 		return DashboardData{}, err
 	}
+	if err := s.loadDashboardWorkItems(ctx, &result, limit); err != nil {
+		return DashboardData{}, err
+	}
+	if err := s.loadDashboardAgentRuns(ctx, &result, limit); err != nil {
+		return DashboardData{}, err
+	}
 	if err := s.loadDashboardQueues(ctx, &result); err != nil {
 		return DashboardData{}, err
 	}
@@ -153,15 +189,83 @@ func (s *Store) loadDashboardWorkflows(ctx context.Context, result *DashboardDat
 		workflow.Artifacts = []DashboardArtifact{}
 		workflow.Sources = []DashboardSource{}
 		workflow.Activity = []DashboardActivity{}
+		workflow.WorkItems = []DashboardWorkItem{}
+		workflow.AgentRuns = []DashboardAgentRun{}
 		result.Workflows = append(result.Workflows, workflow)
 		result.Summary.Total++
 		switch workflow.State {
-		case domain.StateWaitingRequirementReview, domain.StateWaitingPRDAndTestReview:
+		case domain.StateWaitingRequirementReview, domain.StateWaitingPRDAndTestReview,
+			domain.StateWaitingArchitectureReview, domain.StateWaitingReleaseApproval:
 			result.Summary.WaitingGates++
-		case domain.StateReadyForArchitecture:
+		case domain.StateReadyForArchitecture, domain.StateCompleted:
 			result.Summary.Ready++
 		default:
 			result.Summary.InProgress++
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) loadDashboardAgentRuns(ctx context.Context, result *DashboardData, limit int) error {
+	rows, err := s.db.QueryContext(ctx, `WITH recent AS (
+			SELECT id FROM workflows ORDER BY updated_at DESC LIMIT $1
+		), ranked AS (
+			SELECT ar.*,ROW_NUMBER() OVER (PARTITION BY ar.workflow_id ORDER BY ar.started_at DESC) row_number
+			FROM agent_runs ar JOIN recent r ON r.id=ar.workflow_id
+		)
+		SELECT workflow_id,id,COALESCE(work_item_id::text,''),agent_type,run_number,status,model,
+			error_summary,started_at,finished_at
+		FROM ranked WHERE row_number <= 20 ORDER BY started_at DESC`, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	index := workflowIndex(result.Workflows)
+	for rows.Next() {
+		var workflowID string
+		var run DashboardAgentRun
+		var finished sql.NullTime
+		if err := rows.Scan(&workflowID, &run.ID, &run.WorkItemID, &run.AgentType, &run.RunNumber,
+			&run.Status, &run.Model, &run.ErrorSummary, &run.StartedAt, &finished); err != nil {
+			return err
+		}
+		if finished.Valid {
+			run.FinishedAt = &finished.Time
+		}
+		if position, ok := index[workflowID]; ok {
+			result.Workflows[position].AgentRuns = append(result.Workflows[position].AgentRuns, run)
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) loadDashboardWorkItems(ctx context.Context, result *DashboardData, limit int) error {
+	rows, err := s.db.QueryContext(ctx, `WITH recent AS (
+			SELECT id FROM workflows ORDER BY updated_at DESC LIMIT $1
+		)
+		SELECT wi.workflow_id,wi.id,wi.work_item_key,wi.gitlab_issue_iid,wi.title,wi.state,
+			wi.assignee_id,wi.branch_name,wi.target_branch,COALESCE(cd.id::text,''),
+			COALESCE(cd.client_id,''),COALESCE(mr.gitlab_mr_iid,0),COALESCE(mr.head_sha,''),wi.updated_at
+		FROM work_items wi
+		JOIN recent r ON r.id=wi.workflow_id
+		LEFT JOIN codex_dispatches cd ON cd.work_item_id=wi.id
+		LEFT JOIN merge_requests mr ON mr.work_item_id=wi.id
+		ORDER BY wi.updated_at DESC`, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	index := workflowIndex(result.Workflows)
+	for rows.Next() {
+		var workflowID string
+		var item DashboardWorkItem
+		if err := rows.Scan(&workflowID, &item.ID, &item.Key, &item.IssueIID, &item.Title, &item.State,
+			&item.AssigneeID, &item.BranchName, &item.TargetBranch, &item.DispatchID,
+			&item.DispatchClient, &item.MergeRequestIID, &item.MergeRequestSHA, &item.UpdatedAt); err != nil {
+			return err
+		}
+		if position, ok := index[workflowID]; ok {
+			result.Workflows[position].WorkItems = append(result.Workflows[position].WorkItems, item)
 		}
 	}
 	return rows.Err()

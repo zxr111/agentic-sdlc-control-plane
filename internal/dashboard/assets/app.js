@@ -9,7 +9,19 @@
     ["MATERIALIZING_WORK_ITEMS", "Create work"],
     ["PRD_GENERATING", "PRD + test AI"],
     ["WAITING_PRD_AND_TEST_REVIEW", "Planning gates"],
-    ["READY_FOR_ARCHITECTURE", "Architecture ready"]
+    ["READY_FOR_ARCHITECTURE", "Architecture ready"],
+    ["ARCHITECTURE_GENERATING", "Architecture AI"],
+    ["WAITING_ARCHITECTURE_REVIEW", "Architecture gate"],
+    ["PLANNING", "Implementation plan"],
+    ["EXECUTING_WORK_ITEMS", "Codex delivery"],
+    ["ASSEMBLING_RELEASE", "Assemble release"],
+    ["RELEASE_CI_RUNNING", "Release CI"],
+    ["STAGING_DEPLOYING", "Stage deploy"],
+    ["STAGING_VERIFYING", "Stage verify"],
+    ["WAITING_RELEASE_APPROVAL", "Release gate"],
+    ["PRODUCTION_DEPLOYING", "Production deploy"],
+    ["OBSERVING", "Observation"],
+    ["COMPLETED", "Completed"]
   ];
 
   const stateLabels = {
@@ -20,10 +32,27 @@
     MATERIALIZING_WORK_ITEMS: "Creating work items",
     PRD_GENERATING: "Generating PRD & tests",
     WAITING_PRD_AND_TEST_REVIEW: "PRD & test review",
-    READY_FOR_ARCHITECTURE: "Ready for architecture"
+    READY_FOR_ARCHITECTURE: "Ready for architecture",
+    ARCHITECTURE_GENERATING: "Generating architecture",
+    WAITING_ARCHITECTURE_REVIEW: "Architecture review",
+    PLANNING: "Implementation planning",
+    EXECUTING_WORK_ITEMS: "Executing work items",
+    ASSEMBLING_RELEASE: "Assembling release",
+    RELEASE_CI_RUNNING: "Release CI",
+    STAGING_DEPLOYING: "Deploying staging",
+    STAGING_VERIFYING: "Verifying staging",
+    WAITING_RELEASE_APPROVAL: "Release approval",
+    PRODUCTION_DEPLOYING: "Deploying production",
+    OBSERVING: "Observing release",
+    COMPLETED: "Completed",
+    PAUSED: "Paused",
+    CANCELLED: "Cancelled"
   };
 
-  const gateStates = new Set(["WAITING_REQUIREMENT_REVIEW", "WAITING_PRD_AND_TEST_REVIEW"]);
+  const gateStates = new Set([
+    "WAITING_REQUIREMENT_REVIEW", "WAITING_PRD_AND_TEST_REVIEW",
+    "WAITING_ARCHITECTURE_REVIEW", "WAITING_RELEASE_APPROVAL"
+  ]);
   const app = {
     data: null,
     selectedID: null,
@@ -72,8 +101,16 @@
 
   function stateClass(state) {
     if (gateStates.has(state)) return "gate";
-    if (state === "READY_FOR_ARCHITECTURE") return "ready";
+    if (state === "READY_FOR_ARCHITECTURE" || state === "COMPLETED") return "ready";
     return "active";
+  }
+
+  function hasOpenGate(workflow) {
+    return Array.isArray(workflow.gates) && workflow.gates.some(gate => gate.status === "OPEN");
+  }
+
+  function workflowStateClass(workflow) {
+    return hasOpenGate(workflow) ? "gate" : stateClass(workflow.state);
   }
 
   function filterWorkflows() {
@@ -81,9 +118,9 @@
     return app.data.workflows.filter(workflow => {
       const haystack = `${workflow.issue_title} ${workflow.project_path} ${workflow.issue_iid}`.toLowerCase();
       if (app.query && !haystack.includes(app.query.toLowerCase())) return false;
-      if (app.filter === "gate") return gateStates.has(workflow.state);
-      if (app.filter === "ready") return workflow.state === "READY_FOR_ARCHITECTURE";
-      if (app.filter === "active") return !gateStates.has(workflow.state) && workflow.state !== "READY_FOR_ARCHITECTURE";
+      if (app.filter === "gate") return hasOpenGate(workflow);
+      if (app.filter === "ready") return workflow.state === "READY_FOR_ARCHITECTURE" || workflow.state === "COMPLETED";
+      if (app.filter === "active") return !hasOpenGate(workflow) && workflow.state !== "COMPLETED";
       return true;
     });
   }
@@ -110,11 +147,11 @@
         type="button" data-workflow-id="${escapeHTML(workflow.id)}">
         <span class="workflow-item-top">
           <span class="issue-ref">${escapeHTML(workflow.project_path || `Project ${workflow.gitlab_project_id}`)} · #${workflow.issue_iid}</span>
-          <span class="state-pill ${stateClass(workflow.state)}">${escapeHTML(stateLabels[workflow.state] || workflow.state)}</span>
+          <span class="state-pill ${workflowStateClass(workflow)}">${escapeHTML(stateLabels[workflow.state] || workflow.state)}</span>
         </span>
         <span class="workflow-title">${escapeHTML(workflow.issue_title)}</span>
         <span class="workflow-meta">
-          <span><span class="state-dot ${stateClass(workflow.state)}"></span>Revision ${workflow.revision}</span>
+          <span><span class="state-dot ${workflowStateClass(workflow)}"></span>Revision ${workflow.revision}</span>
           <span>${relativeTime(workflow.updated_at)}</span>
         </span>
       </button>
@@ -133,7 +170,7 @@
     const current = states.findIndex(([state]) => state === workflow.state);
     return states.map(([state, label], index) => {
       const status = index < current ? "is-complete" : index === current ? "is-current" : "";
-      const ai = !gateStates.has(state) && state !== "READY_FOR_ARCHITECTURE" ? "is-ai" : "";
+      const ai = !gateStates.has(state) && state !== "READY_FOR_ARCHITECTURE" && state !== "COMPLETED" ? "is-ai" : "";
       return `<div class="pipeline-step ${status} ${ai}" aria-label="${escapeHTML(label)}: ${
         index < current ? "complete" : index === current ? "current" : "pending"
       }">${escapeHTML(label)}</div>`;
@@ -237,6 +274,43 @@
     `).join("")}</div>`;
   }
 
+  function renderWorkItems(workflow) {
+    const items = workflow.work_items || [];
+    if (!items.length) return `<div class="empty-panel">Work items appear after Requirement approval.</div>`;
+    return items.map(item => `
+      <div class="artifact-card">
+        <div class="panel-title-row">
+          <p class="artifact-name">${escapeHTML(item.key)} · #${item.issue_iid || "pending"}</p>
+          <span class="artifact-type">${escapeHTML(item.state)}</span>
+        </div>
+        <div class="artifact-meta">
+          <span>Engineer #${item.assignee_id || "unassigned"}</span>
+          ${item.branch_name ? `<span>·</span><span>${escapeHTML(item.branch_name)}</span>` : ""}
+          ${item.dispatch_client ? `<span>·</span><span>Codex ${escapeHTML(item.dispatch_client)}</span>` : ""}
+          ${item.merge_request_iid ? `<span>·</span><span>MR !${item.merge_request_iid}</span>` : ""}
+        </div>
+      </div>
+    `).join("");
+  }
+
+  function renderAgentRuns(workflow) {
+    const runs = workflow.agent_runs || [];
+    if (!runs.length) return `<div class="empty-panel">Agent runs appear when Factory starts generation or quality work.</div>`;
+    return runs.slice(0, 12).map(run => `
+      <div class="artifact-card">
+        <div class="panel-title-row">
+          <p class="artifact-name">${escapeHTML(run.agent_type)} · run ${run.run_number}</p>
+          <span class="artifact-type">${escapeHTML(run.status)}</span>
+        </div>
+        <div class="artifact-meta">
+          <span>${escapeHTML(run.model || "Factory")}</span>
+          ${run.work_item_id ? `<span>·</span><span>${escapeHTML(run.work_item_id)}</span>` : ""}
+          <span>·</span><span>${relativeTime(run.started_at)}</span>
+        </div>
+      </div>
+    `).join("");
+  }
+
   function renderDetail() {
     if (!app.data) return;
     const workflow = app.data.workflows.find(item => item.id === app.selectedID);
@@ -304,6 +378,20 @@
           </section>
         </div>
         <div class="detail-column">
+          <section class="panel">
+            <div class="panel-title-row">
+              <h3>Codex work items</h3>
+              <span>${(workflow.work_items || []).length} tracked</span>
+            </div>
+            ${renderWorkItems(workflow)}
+          </section>
+          <section class="panel">
+            <div class="panel-title-row">
+              <h3>Agent runs</h3>
+              <span>${(workflow.agent_runs || []).length} recent</span>
+            </div>
+            ${renderAgentRuns(workflow)}
+          </section>
           <section class="panel">
             <div class="panel-title-row">
               <h3>Audit timeline</h3>
