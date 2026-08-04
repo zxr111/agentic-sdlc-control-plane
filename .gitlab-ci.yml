@@ -42,9 +42,9 @@ verify_postgres:
 
 verify_manifests:
   stage: verify
-  image:
-    name: registry.k8s.io/kubectl:v1.30.10
-    entrypoint: [""]
+  image: alpine:3.22
+  before_script:
+    - apk add --no-cache kubectl
   script:
     - kubectl kustomize deploy/overlays/test > /tmp/ai-factory-test.yaml
     - test -s /tmp/ai-factory-test.yaml
@@ -68,9 +68,7 @@ publish_image:
 
 deploy_test:
   stage: deploy_test
-  image:
-    name: registry.k8s.io/kubectl:v1.30.10
-    entrypoint: [""]
+  image: alpine:3.22
   environment:
     name: test
     url: https://ai-factory-test.kuainiu.io/webhooks/gitlab
@@ -79,6 +77,7 @@ deploy_test:
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   before_script:
+    - apk add --no-cache kubectl
     - |
       required_variables="DATABASE_URL GITLAB_API_TOKEN GITLAB_WEBHOOK_SECRET CALLBACK_SHARED_SECRET CONFLUENCE_EMAIL CONFLUENCE_API_TOKEN OPENAI_API_KEY CI_DEPLOY_USER CI_DEPLOY_PASSWORD"
       missing_variables=""
