@@ -8,7 +8,8 @@
 - A read-only Confluence service account.
 - A project-scoped OpenAI API key with a test budget.
 - HTTPS ingress reachable from the self-managed GitLab host.
-- A dedicated registry robot account configured as protected, masked, hidden `REGISTRY_USER` and `REGISTRY_PASSWORD`, plus non-secret `REGISTRY_HOST` and `REGISTRY_IMAGE`.
+- GitLab Container Registry enabled for this project and a project Deploy Token with `read_registry`, exposed as protected, masked `CI_DEPLOY_USER` and `CI_DEPLOY_PASSWORD` variables.
+- A protected Kubernetes file variable or GitLab Agent context that allows only the `ai-factory-test` namespace. Set `KUBE_CONTEXT` only when the kubeconfig contains more than one context.
 
 ## Project configuration
 
@@ -53,7 +54,9 @@ The `staging_verified` callback must declare whether production data or schema m
 
 ## Deployment
 
-The pipeline always compiles deployable Linux binaries. After dedicated registry variables are verified, set `ENABLE_TEST_IMAGE_PUBLISH=true` to enable image publication. After every deployment prerequisite is verified, set `ENABLE_TEST_DEPLOY=true`; `deploy_test` still remains a manual Engineer Gate. It creates the image-pull Secret, applies runtime Secrets, runs the migration Job, and then waits for API and worker rollouts. The migration process uses a PostgreSQL advisory lock and transactional, idempotent DDL.
+Merge-request and branch pipelines run unit, integration, vet, and manifest verification. A push to the protected default branch publishes both the immutable commit image and the moving `test` tag to the project GitLab Container Registry, then automatically deploys that exact commit image. The deploy job validates every required protected variable before touching the cluster, creates the long-lived image-pull Secret from the read-only Deploy Token, applies runtime Secrets, runs the migration Job, and waits for API and worker rollouts. The migration process uses a PostgreSQL advisory lock and transactional, idempotent DDL.
+
+Required protected CI variables are `DATABASE_URL`, `GITLAB_API_TOKEN`, `GITLAB_WEBHOOK_SECRET`, `CALLBACK_SHARED_SECRET`, `CONFLUENCE_EMAIL`, `CONFLUENCE_API_TOKEN`, `OPENAI_API_KEY`, `CI_DEPLOY_USER`, and `CI_DEPLOY_PASSWORD`. Kubernetes authentication must be supplied as a protected file variable (normally `KUBECONFIG`) or by a GitLab Agent context. `DELIVERY_TRIGGER_TOKEN` is optional and must be paired with the fixed `DELIVERY_TRIGGER_URL` configuration when enabled.
 
 Before first deployment, verify the ingress class, hostname, TLS secret, registry pull secret, PostgreSQL network route, TLS mode, and NetworkPolicy namespace selectors against the test cluster.
 
