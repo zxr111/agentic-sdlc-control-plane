@@ -96,3 +96,31 @@ var testPlanSchema = json.RawMessage(`{
   },
   "required":["decision","coverage_summary","blockers","residual_risks","test_cases","coverage_matrix"]
 }`)
+
+var architectureSchema = json.RawMessage(`{
+  "type":"object","additionalProperties":false,
+  "properties":{
+    "decision":{"type":"string","enum":["changes_requested","ready_for_human_approval"]},
+    "context":{"type":"string"},"approach":{"type":"string"},
+    "components":{"type":"array","items":{"type":"string"}},
+    "data_changes":{"type":"array","items":{"type":"string"}},
+    "interfaces":{"type":"array","items":{"type":"string"}},
+    "security":{"type":"array","items":{"type":"string"}},
+    "observability":{"type":"array","items":{"type":"string"}},
+    "migration_plan":{"type":"array","items":{"type":"string"}},
+    "rollout":{"type":"array","items":{"type":"string"}},
+    "rollback":{"type":"array","items":{"type":"string"}},
+    "architecture_deviations":{"type":"array","items":{"type":"string"}},
+    "risks":{"type":"array","items":{"type":"string"}},
+    "open_questions":{"type":"array","items":` + questionSchema + `},
+    "implementation_units":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{
+      "work_item_key":{"type":"string"},"repository":{"type":"string"},
+      "likely_paths":{"type":"array","items":{"type":"string"}},
+      "verification":{"type":"array","items":{"type":"string"}},
+      "ci_requirements":{"type":"array","items":{"type":"string"}}
+    },"required":["work_item_key","repository","likely_paths","verification","ci_requirements"]}}
+  },
+  "required":["decision","context","approach","components","data_changes","interfaces","security",
+    "observability","migration_plan","rollout","rollback","architecture_deviations","risks",
+    "open_questions","implementation_units"]
+}`)

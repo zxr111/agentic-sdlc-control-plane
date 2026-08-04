@@ -316,3 +316,31 @@ func TestExpiredQueueLeaseIsRecovered(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCodexDispatchIsIdempotentAndHasNoLease(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(time.Now().UnixNano(), 77, "Dispatch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := domain.WorkItem{
+		ID: uuid.NewString(), WorkflowID: workflow.ID, Key: "backend-api", Title: "[Feature][API] Build endpoint",
+		State: domain.WorkItemReadyForCodex, OwnerRole: "backend", AssigneeID: 1272,
+		TargetBranch: "master", AcceptanceIDs: []string{"AC-1"}, Revision: 1,
+	}
+	if err := repository.SaveWorkItems(ctx, workflow.ID, []domain.WorkItem{item}, nil); err != nil {
+		t.Fatal(err)
+	}
+	first, created, err := repository.StartCodex(ctx, item.ID, "engineer-mac", 1272)
+	if err != nil || !created {
+		t.Fatalf("first dispatch: created=%t err=%v", created, err)
+	}
+	second, created, err := repository.StartCodex(ctx, item.ID, "engineer-mac", 1272)
+	if err != nil || created || first.ID != second.ID {
+		t.Fatalf("duplicate dispatch: first=%#v second=%#v created=%t err=%v", first, second, created, err)
+	}
+	if _, _, err := repository.StartCodex(ctx, item.ID, "other-mac", 995); err == nil {
+		t.Fatal("unassigned engineer must not receive an existing dispatch")
+	}
+}

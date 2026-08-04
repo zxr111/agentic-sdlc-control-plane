@@ -31,7 +31,9 @@ func main() {
 	defer repository.Close()
 
 	mux := http.NewServeMux()
-	mux.Handle("/", webhook.New(cfg.GitLabWebhookSecret, cfg.Projects, repository, logger).Routes())
+	mux.Handle("/", webhook.NewWithCallbackSecret(
+		cfg.GitLabWebhookSecret, cfg.CallbackSharedSecret, cfg.Projects, repository, logger,
+	).Routes())
 	dashboard.New(repository, cfg.Projects, cfg.GitLabAPIURL, logger).Register(mux)
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

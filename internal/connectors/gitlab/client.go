@@ -41,6 +41,20 @@ type Issue struct {
 	Author      User     `json:"author"`
 }
 
+type MergeRequest struct {
+	ID           int64  `json:"id"`
+	IID          int64  `json:"iid"`
+	ProjectID    int64  `json:"project_id"`
+	Title        string `json:"title"`
+	State        string `json:"state"`
+	Draft        bool   `json:"draft"`
+	SourceBranch string `json:"source_branch"`
+	TargetBranch string `json:"target_branch"`
+	SHA          string `json:"sha"`
+	WebURL       string `json:"web_url"`
+	MergeStatus  string `json:"detailed_merge_status"`
+}
+
 func (i Issue) HasLabel(label string) bool {
 	for _, value := range i.Labels {
 		if value == label {
@@ -67,6 +81,73 @@ type Note struct {
 func (c *Client) GetIssue(ctx context.Context, projectID, issueIID int64) (Issue, error) {
 	var result Issue
 	err := c.json(ctx, http.MethodGet, fmt.Sprintf("/projects/%d/issues/%d", projectID, issueIID), nil, &result)
+	return result, err
+}
+
+func (c *Client) UpdateIssueLabels(ctx context.Context, projectID, issueIID int64, add, remove []string) (Issue, error) {
+	payload := map[string]string{}
+	if len(add) > 0 {
+		payload["add_labels"] = strings.Join(add, ",")
+	}
+	if len(remove) > 0 {
+		payload["remove_labels"] = strings.Join(remove, ",")
+	}
+	var result Issue
+	err := c.json(ctx, http.MethodPut, fmt.Sprintf("/projects/%d/issues/%d", projectID, issueIID), payload, &result)
+	return result, err
+}
+
+func (c *Client) GetMergeRequest(ctx context.Context, projectID, mergeRequestIID int64) (MergeRequest, error) {
+	var result MergeRequest
+	err := c.json(ctx, http.MethodGet, fmt.Sprintf("/projects/%d/merge_requests/%d", projectID, mergeRequestIID), nil, &result)
+	return result, err
+}
+
+func (c *Client) EnsureBranch(ctx context.Context, projectID int64, branch, ref string) error {
+	var existing struct {
+		Name string `json:"name"`
+	}
+	path := fmt.Sprintf("/projects/%d/repository/branches/%s", projectID, url.PathEscape(branch))
+	err := c.json(ctx, http.MethodGet, path, nil, &existing)
+	if err == nil {
+		return nil
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+		return err
+	}
+	var created struct {
+		Name string `json:"name"`
+	}
+	return c.json(ctx, http.MethodPost, fmt.Sprintf("/projects/%d/repository/branches", projectID),
+		map[string]string{"branch": branch, "ref": ref}, &created)
+}
+
+func (c *Client) CreateMergeRequestIdempotent(ctx context.Context, projectID int64, title, source, target, description string) (MergeRequest, error) {
+	query := url.Values{}
+	query.Set("state", "opened")
+	query.Set("source_branch", source)
+	query.Set("target_branch", target)
+	query.Set("per_page", "100")
+	var existing []MergeRequest
+	if err := c.json(ctx, http.MethodGet, fmt.Sprintf("/projects/%d/merge_requests?%s", projectID, query.Encode()), nil, &existing); err != nil {
+		return MergeRequest{}, err
+	}
+	if len(existing) > 0 {
+		return existing[0], nil
+	}
+	var created MergeRequest
+	err := c.json(ctx, http.MethodPost, fmt.Sprintf("/projects/%d/merge_requests", projectID), map[string]any{
+		"title": title, "source_branch": source, "target_branch": target, "description": description,
+		"remove_source_branch": true,
+	}, &created)
+	return created, err
+}
+
+func (c *Client) MergeWhenPipelineSucceeds(ctx context.Context, projectID, mergeRequestIID int64, sha string) (MergeRequest, error) {
+	var result MergeRequest
+	err := c.json(ctx, http.MethodPut, fmt.Sprintf("/projects/%d/merge_requests/%d/merge", projectID, mergeRequestIID),
+		map[string]any{"sha": sha, "merge_when_pipeline_succeeds": true, "should_remove_source_branch": true}, &result)
 	return result, err
 }
 

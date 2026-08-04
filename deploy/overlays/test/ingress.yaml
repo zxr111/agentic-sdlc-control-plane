@@ -21,3 +21,24 @@ spec:
                 name: ai-sdlc-factory-api
                 port:
                   name: http
+          - path: /callbacks/jenkins
+            pathType: Exact
+            backend:
+              service:
+                name: ai-sdlc-factory-api
+                port:
+                  name: http
+          - path: /callbacks/monitoring
+            pathType: Exact
+            backend:
+              service:
+                name: ai-sdlc-factory-api
+                port:
+                  name: http
+          - path: /callbacks/quality
+            pathType: Exact
+            backend:
+              service:
+                name: ai-sdlc-factory-api
+                port:
+                  name: http

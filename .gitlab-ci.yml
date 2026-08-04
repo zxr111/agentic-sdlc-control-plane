@@ -1,12 +1,23 @@
-stages: [verify, image, deploy_test]
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+stages:
+  - verify
+  - image
+  - deploy_test
 
 default:
   tags:
     - hk-cluster-devops-cicd
+  interruptible: true
 
 variables:
   GOFLAGS: "-mod=vendor"
   IMAGE_TAG: "$CI_COMMIT_SHA"
+  TEST_NAMESPACE: "ai-factory-test"
 
 verify:
   stage: verify
@@ -29,20 +40,14 @@ verify_postgres:
   script:
     - go test -tags=integration ./internal/store
 
-build_binaries:
-  stage: image
-  image: golang:1.25-alpine
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+verify_manifests:
+  stage: verify
+  image: alpine:3.22
+  before_script:
+    - apk add --no-cache kubectl
   script:
-    - mkdir -p dist
-    - CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o dist/factory-api ./cmd/factory-api
-    - CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o dist/factory-worker ./cmd/factory-worker
-    - CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o dist/factory-migrate ./cmd/factory-migrate
-  artifacts:
-    expire_in: 7 days
-    paths:
-      - dist/
+    - kubectl kustomize deploy/overlays/test > /tmp/ai-factory-test.yaml
+    - test -s /tmp/ai-factory-test.yaml
 
 publish_image:
   stage: image
@@ -50,41 +55,72 @@ publish_image:
   services:
     - name: docker:27-dind
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $ENABLE_TEST_IMAGE_PUBLISH == "true"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  before_script:
+    - test -n "$CI_REGISTRY"
+    - test -n "$CI_REGISTRY_IMAGE"
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
   script:
-    - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
-    - docker build --pull=false -t "$REGISTRY_IMAGE:$IMAGE_TAG" .
-    - docker push "$REGISTRY_IMAGE:$IMAGE_TAG"
+    - docker build --pull=false --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" -t "$CI_REGISTRY_IMAGE:$IMAGE_TAG" .
+    - docker push "$CI_REGISTRY_IMAGE:$IMAGE_TAG"
+    - docker tag "$CI_REGISTRY_IMAGE:$IMAGE_TAG" "$CI_REGISTRY_IMAGE:test"
+    - docker push "$CI_REGISTRY_IMAGE:test"
 
 deploy_test:
   stage: deploy_test
-  image: bitnami/kubectl:1.30
+  image: alpine:3.22
   environment:
     name: test
+    url: https://ai-factory-test.kuainiu.io/webhooks/gitlab
+    deployment_tier: testing
   resource_group: ai-factory-test
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $ENABLE_TEST_DEPLOY == "true"'
-      when: manual
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  before_script:
+    - apk add --no-cache kubectl
+    - |
+      required_variables="DATABASE_URL GITLAB_API_TOKEN GITLAB_WEBHOOK_SECRET CALLBACK_SHARED_SECRET CONFLUENCE_EMAIL CONFLUENCE_API_TOKEN OPENAI_API_KEY CI_DEPLOY_USER CI_DEPLOY_PASSWORD"
+      missing_variables=""
+      for variable_name in $required_variables; do
+        eval "variable_value=\${$variable_name:-}"
+        if [ -z "$variable_value" ]; then
+          missing_variables="$missing_variables $variable_name"
+        fi
+      done
+      if [ -n "$missing_variables" ]; then
+        echo "Missing protected CI variables:$missing_variables" >&2
+        exit 1
+      fi
+    - if [ -n "${KUBE_CONTEXT:-}" ]; then kubectl config use-context "$KUBE_CONTEXT"; fi
+    - kubectl cluster-info
   script:
-    - kubectl config use-context "$KUBE_CONTEXT"
     - kubectl apply -f deploy/overlays/test/namespace.yaml
-    - kubectl -n ai-factory-test create secret docker-registry registry-credentials
-      --docker-server="$REGISTRY_HOST"
-      --docker-username="$REGISTRY_USER"
-      --docker-password="$REGISTRY_PASSWORD"
+    - >-
+      kubectl -n "$TEST_NAMESPACE" create secret docker-registry registry-credentials
+      --docker-server="$CI_REGISTRY"
+      --docker-username="$CI_DEPLOY_USER"
+      --docker-password="$CI_DEPLOY_PASSWORD"
       --dry-run=client -o yaml | kubectl apply -f -
-    - kubectl -n ai-factory-test create secret generic ai-sdlc-factory-secrets
+    - >-
+      kubectl -n "$TEST_NAMESPACE" create secret generic ai-sdlc-factory-secrets
       --from-literal=DATABASE_URL="$DATABASE_URL"
       --from-literal=GITLAB_API_TOKEN="$GITLAB_API_TOKEN"
       --from-literal=GITLAB_WEBHOOK_SECRET="$GITLAB_WEBHOOK_SECRET"
+      --from-literal=CALLBACK_SHARED_SECRET="$CALLBACK_SHARED_SECRET"
       --from-literal=CONFLUENCE_EMAIL="$CONFLUENCE_EMAIL"
       --from-literal=CONFLUENCE_API_TOKEN="$CONFLUENCE_API_TOKEN"
       --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY"
+      --from-literal=DELIVERY_TRIGGER_TOKEN="${DELIVERY_TRIGGER_TOKEN:-}"
       --dry-run=client -o yaml | kubectl apply -f -
-    - kubectl -n ai-factory-test delete job ai-sdlc-factory-migrate --ignore-not-found=true
-    - kubectl kustomize deploy/overlays/test |
-      sed "s#registry.kuainiujinke.com/argus/ai-sdlc-factory:test#$REGISTRY_IMAGE:$IMAGE_TAG#g" |
+    - kubectl -n "$TEST_NAMESPACE" delete job ai-sdlc-factory-migrate --ignore-not-found=true
+    - >-
+      kubectl kustomize deploy/overlays/test |
+      sed "s#registry.kuainiujinke.com/argus/ai-sdlc-factory:test#$CI_REGISTRY_IMAGE:$IMAGE_TAG#g" |
       kubectl apply -f -
-    - kubectl -n ai-factory-test wait --for=condition=complete job/ai-sdlc-factory-migrate --timeout=300s
-    - kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-api --timeout=300s
-    - kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-worker --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" wait --for=condition=complete job/ai-sdlc-factory-migrate --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" rollout status deployment/ai-sdlc-factory-api --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" rollout status deployment/ai-sdlc-factory-worker --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" get deployment,pod,service,ingress -l app.kubernetes.io/name=ai-sdlc-factory
+  after_script:
+    - kubectl -n "$TEST_NAMESPACE" get pods -l app.kubernetes.io/name=ai-sdlc-factory -o wide || true
+    - kubectl -n "$TEST_NAMESPACE" logs job/ai-sdlc-factory-migrate --tail=100 || true

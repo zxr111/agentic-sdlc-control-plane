@@ -99,6 +99,30 @@ func RenderTestPlan(plan TestPlan) string {
 	return out.String()
 }
 
+func RenderArchitecture(value Architecture) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "## Architecture review\n\n**Decision:** `%s`\n\n## Context\n\n%s\n\n## Recommended approach\n\n%s\n\n",
+		value.Decision, value.Context, value.Approach)
+	renderList(&out, "Components and boundaries", value.Components)
+	renderList(&out, "Data changes", value.DataChanges)
+	renderList(&out, "Interfaces", value.Interfaces)
+	renderList(&out, "Security", value.Security)
+	renderList(&out, "Observability", value.Observability)
+	renderList(&out, "Migration plan", value.MigrationPlan)
+	renderList(&out, "Rollout", value.Rollout)
+	renderList(&out, "Rollback", value.Rollback)
+	renderList(&out, "Architecture deviations", value.ArchitectureDeviations)
+	renderList(&out, "Risks", value.Risks)
+	renderQuestions(&out, value.OpenQuestions)
+	out.WriteString("## Implementation units\n\n")
+	for _, unit := range value.ImplementationUnits {
+		fmt.Fprintf(&out, "### `%s` → `%s`\n\n- Likely paths: %s\n- Verification: %s\n- Required CI: %s\n\n",
+			unit.WorkItemKey, unit.Repository, strings.Join(unit.LikelyPaths, ", "),
+			strings.Join(unit.Verification, "; "), strings.Join(unit.CIRequirements, "; "))
+	}
+	return out.String()
+}
+
 func renderList(out *strings.Builder, title string, values []string) {
 	fmt.Fprintf(out, "## %s\n\n", title)
 	if len(values) == 0 {
