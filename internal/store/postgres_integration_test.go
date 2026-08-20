@@ -491,6 +491,22 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	if err != nil || len(hits) != 1 || hits[0].SourceVersion != "7" || hits[0].AuthorityLevel != 100 {
 		t.Fatalf("unexpected search hits=%#v err=%v", hits, err)
 	}
+	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(projectID, 82, "idempotency"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retrieved, err := repository.RetrieveKnowledge(ctx, workflow.ID, projectID, "idempotency", 50, 10)
+	if err != nil || len(retrieved) != 1 {
+		t.Fatalf("unexpected governed retrieval=%#v err=%v", retrieved, err)
+	}
+	var selected int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM retrieval_results rr
+		JOIN retrieval_runs r ON r.id=rr.retrieval_run_id WHERE r.workflow_id=$1 AND rr.selected`, workflow.ID).Scan(&selected); err != nil {
+		t.Fatal(err)
+	}
+	if selected != 1 {
+		t.Fatalf("selected retrieval evidence=%d", selected)
+	}
 	memoryID, err := repository.ProposeProjectMemory(ctx, ProjectMemory{ProjectID: projectID,
 		Key: "payment-retry", Content: "Retries preserve the idempotency key", SourceDocumentID: hits[0].DocumentID},
 		[]map[string]string{{"chunk_id": hits[0].ChunkID, "hash": hits[0].ContentHash}})

@@ -36,6 +36,44 @@ type KnowledgeHit struct {
 	ContentHash    string  `json:"content_hash"`
 	AuthorityLevel int     `json:"authority_level"`
 	LexicalScore   float64 `json:"lexical_score"`
+	VectorScore    float64 `json:"vector_score"`
+	RerankScore    float64 `json:"rerank_score"`
+}
+
+// RetrieveKnowledge performs a bounded project-scoped retrieval and records
+// every selected result so the exact RAG evidence can be replayed later.
+func (s *Store) RetrieveKnowledge(ctx context.Context, workflowID string, projectID int64, query string, minimumAuthority, limit int) ([]KnowledgeHit, error) {
+	runID := uuid.NewString()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO retrieval_runs
+		(id,workflow_id,query_text,filters_json,strategy) VALUES ($1,$2,$3,$4,'LEXICAL_AUTHORITY_V1')`,
+		runID, workflowID, query, `{"project_scoped":true}`); err != nil {
+		return nil, err
+	}
+	hits, err := s.SearchKnowledge(ctx, projectID, query, minimumAuthority, limit)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	for index, hit := range hits {
+		hits[index].RerankScore = hit.LexicalScore + float64(hit.AuthorityLevel)/1000
+		if _, err := tx.ExecContext(ctx, `INSERT INTO retrieval_results
+			(id,retrieval_run_id,knowledge_chunk_id,rank,lexical_score,vector_score,rerank_score,selected)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE)`, uuid.NewString(), runID, hit.ChunkID, index+1,
+			hit.LexicalScore, hit.VectorScore, hits[index].RerankScore); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE retrieval_runs SET finished_at=CURRENT_TIMESTAMP WHERE id=$1`, runID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return hits, nil
 }
 
 func (s *Store) IngestKnowledge(ctx context.Context, source KnowledgeSource) (string, bool, error) {

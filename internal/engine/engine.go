@@ -412,7 +412,8 @@ func sourceText(snapshots []domain.Snapshot) string {
 	return out.String()
 }
 
-func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, agentType, inputHash string, snapshots []domain.Snapshot) (string, error) {
+func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, agentType, inputHash string, snapshots []domain.Snapshot) (string, string, error) {
+	contextText := sourceText(snapshots)
 	manifestID := ""
 	if e.v3.ContextManifest {
 		entries := make([]store.ContextEntryInput, 0, len(snapshots))
@@ -423,13 +424,32 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 				Citation: map[string]any{"url": snapshot.URL, "page_id": snapshot.ConfluencePageID, "version": snapshot.Version},
 			})
 		}
+		if e.v3.RAG {
+			hits, err := e.store.RetrieveKnowledge(ctx, workflow.ID, workflow.GitLabProjectID, workflow.IssueTitle, 0, 8)
+			if err != nil {
+				return "", "", fmt.Errorf("retrieve governed context: %w", err)
+			}
+			if len(hits) > 0 {
+				var supplemental strings.Builder
+				supplemental.WriteString("\n\n--- 受治理的补充知识（不覆盖上述权威需求）---\n")
+				for _, hit := range hits {
+					fmt.Fprintf(&supplemental, "\n[%s / %s v%s / SHA-256 %s]\n%s\n", hit.Title, hit.SourceKey, hit.SourceVersion, hit.ContentHash, hit.Content)
+					entries = append(entries, store.ContextEntryInput{SourceType: "KNOWLEDGE_CHUNK", SourceID: hit.ChunkID,
+						AuthorityLevel: hit.AuthorityLevel, TokenCount: len(strings.Fields(hit.Content)), ContentHash: hit.ContentHash,
+						Citation: map[string]any{"document_id": hit.DocumentID, "source_type": hit.SourceType, "source_key": hit.SourceKey,
+							"source_version": hit.SourceVersion, "title": hit.Title}})
+				}
+				contextText += supplemental.String()
+			}
+		}
 		var err error
 		manifestID, err = e.store.CreateContextManifest(ctx, workflow.ID, agentType, "v1", entries)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return e.store.StartAgentRunWithContext(ctx, workflow.ID, "", agentType, e.agents.Model(), inputHash, manifestID)
+	runID, err := e.store.StartAgentRunWithContext(ctx, workflow.ID, "", agentType, e.agents.Model(), inputHash, manifestID)
+	return runID, contextText, err
 }
 
 func storeTrace(trace agents.Trace) store.AgentRunTrace {
@@ -453,7 +473,7 @@ type governedReviewObserver struct {
 }
 
 func (o *governedReviewObserver) Start(ctx context.Context, role string) (string, error) {
-	runID, err := o.engine.startAgentRun(ctx, o.workflow, o.stage+"_"+role, o.workflow.SourceHash, o.snapshots)
+	runID, _, err := o.engine.startAgentRun(ctx, o.workflow, o.stage+"_"+role, o.workflow.SourceHash, o.snapshots)
 	if err == nil {
 		o.mu.Lock()
 		o.runIDs[role] = runID
@@ -516,11 +536,11 @@ func renderGovernedReview(synthesis multiagent.Synthesis) string {
 
 func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Workflow, project domain.ProjectConfig,
 	snapshots []domain.Snapshot, feedback string) error {
-	runID, err := e.startAgentRun(ctx, workflow, "REQUIREMENT", combinedHash(snapshots), snapshots)
+	runID, agentContext, err := e.startAgentRun(ctx, workflow, "REQUIREMENT", combinedHash(snapshots), snapshots)
 	if err != nil {
 		return err
 	}
-	review, trace, err := e.agents.ReviewRequirement(ctx, workflow.ID, sourceText(snapshots), feedback)
+	review, trace, err := e.agents.ReviewRequirement(ctx, workflow.ID, agentContext, feedback)
 	if err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
@@ -975,12 +995,11 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 		return err
 	}
 	reviewJSON, _ := json.Marshal(review)
-	source := sourceText(snapshots)
-	prdRunID, err := e.startAgentRun(ctx, workflow, "PRD", workflow.SourceHash, snapshots)
+	prdRunID, source, err := e.startAgentRun(ctx, workflow, "PRD", workflow.SourceHash, snapshots)
 	if err != nil {
 		return err
 	}
-	testRunID, err := e.startAgentRun(ctx, workflow, "TEST", workflow.SourceHash, snapshots)
+	testRunID, testSource, err := e.startAgentRun(ctx, workflow, "TEST", workflow.SourceHash, snapshots)
 	if err != nil {
 		_ = e.store.FinishAgentRun(ctx, prdRunID, "FAILED", "", err)
 		return err
@@ -997,7 +1016,7 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 	}()
 	go func() {
 		defer wait.Done()
-		tests, testTrace, testErr = e.agents.GenerateTestPlan(ctx, workflow.ID, source, string(reviewJSON), testFeedback)
+		tests, testTrace, testErr = e.agents.GenerateTestPlan(ctx, workflow.ID, testSource, string(reviewJSON), testFeedback)
 	}()
 	wait.Wait()
 	if prdErr != nil {
@@ -1082,11 +1101,11 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 	if err != nil {
 		return err
 	}
-	runID, err := e.startAgentRun(ctx, workflow, "ARCHITECTURE", workflow.SourceHash, snapshots)
+	runID, agentContext, err := e.startAgentRun(ctx, workflow, "ARCHITECTURE", workflow.SourceHash, snapshots)
 	if err != nil {
 		return err
 	}
-	value, trace, err := e.agents.GenerateArchitecture(ctx, workflow.ID, sourceText(snapshots),
+	value, trace, err := e.agents.GenerateArchitecture(ctx, workflow.ID, agentContext,
 		string(requirement.Content), string(prd.Content), string(testPlan.Content), event.Feedback)
 	if err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
