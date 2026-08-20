@@ -74,7 +74,7 @@
   const relativeTime = value => {
     const date = new Date(value);
     const seconds = Math.round((date.getTime() - Date.now()) / 1000);
-    const formatter = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+    const formatter = new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" });
     const ranges = [
       [60, "second"],
       [60, "minute"],
@@ -92,7 +92,7 @@
     return date.toLocaleString();
   };
 
-  const formatTime = value => new Intl.DateTimeFormat("en", {
+  const formatTime = value => new Intl.DateTimeFormat("zh-CN", {
     month: "short",
     day: "2-digit",
     hour: "2-digit",
@@ -455,6 +455,44 @@
       </table>`;
   }
 
+  function compactList(items, renderItem, emptyText) {
+    if (!items || !items.length) return `<div class="empty-panel">${escapeHTML(emptyText)}</div>`;
+    return items.slice(0, 8).map(renderItem).join("");
+  }
+
+  function renderV3() {
+    const v3 = app.data.v3;
+    if (!v3) return;
+    const registry = v3.registry;
+    const registryValues = [
+      ["激活提示词", registry.active_prompts], ["激活模型", registry.active_models],
+      ["Agent 配置", registry.active_profiles], ["激活技能", registry.active_skills],
+      ["激活工具", registry.active_tools]
+    ];
+    byID("v3-registry").innerHTML = registryValues.map(([label, value]) => `<div class="queue-item"><span>${label}</span><strong>${value}</strong></div>`).join("");
+    const usage = v3.usage;
+    byID("v3-usage-title").textContent = `${usage.runs} 次运行`;
+    byID("v3-usage").innerHTML = `<div class="v3-stats">
+      <span>输入 Token<strong>${usage.input_tokens.toLocaleString()}</strong></span>
+      <span>缓存 Token<strong>${usage.cached_tokens.toLocaleString()}</strong></span>
+      <span>输出 Token<strong>${usage.output_tokens.toLocaleString()}</strong></span>
+      <span>推理 Token<strong>${usage.reasoning_tokens.toLocaleString()}</strong></span>
+      <span>估算成本（微单位）<strong>${usage.estimated_cost_microunits.toLocaleString()}</strong></span>
+      <span>平均延迟<strong>${usage.average_latency_ms} ms</strong></span></div>`;
+    const knowledge = v3.knowledge;
+    byID("v3-knowledge").innerHTML = `<div class="v3-stats">
+      <span>有效文档<strong>${knowledge.active_documents}</strong></span><span>有效版本<strong>${knowledge.active_versions}</strong></span>
+      <span>知识分块<strong>${knowledge.chunks}</strong></span><span>已批准记忆<strong>${knowledge.approved_memories}</strong></span>
+      <span>候选记忆<strong>${knowledge.candidate_memories}</strong></span></div>`;
+    byID("v3-routes").innerHTML = compactList(v3.routes, route => `<div class="artifact-card"><div class="panel-title-row"><p class="artifact-name">${escapeHTML(route.risk_level)} 风险路由</p><span class="artifact-type">${route.fallback ? "降级" : "主路由"}</span></div><div class="artifact-meta"><span>${escapeHTML(route.reason)}</span><span>·</span><span>${route.estimated_cost_microunits} 微单位</span></div></div>`, "暂无模型路由记录。");
+    byID("v3-opinions").innerHTML = compactList(v3.opinions, opinion => `<div class="artifact-card"><div class="panel-title-row"><p class="artifact-name">${escapeHTML(opinion.role)}</p><span class="artifact-type">${escapeHTML(opinion.decision)} · ${(opinion.confidence * 100).toFixed(0)}%</span></div><div class="artifact-meta"><span>${escapeHTML(opinion.summary)}</span>${opinion.minority ? "<span>· 少数意见</span>" : ""}</div></div>`, "暂无多 Agent 意见。");
+    byID("v3-evaluations").innerHTML = compactList(v3.evaluations, run => `<div class="artifact-card"><div class="panel-title-row"><p class="artifact-name">${escapeHTML(run.suite_key)}</p><span class="artifact-type">${escapeHTML(run.status)}</span></div><div class="artifact-meta"><span>${run.shadow ? "影子评测" : "正式评测"}</span><span>·</span><span>均分 ${Number(run.average_score).toFixed(3)}</span></div></div>`, "暂无评测运行。");
+    byID("v3-tools").innerHTML = compactList(v3.tool_calls, call => `<div class="artifact-card"><div class="panel-title-row"><p class="artifact-name">${escapeHTML(call.tool_key)}</p><span class="artifact-type">${escapeHTML(call.status)}</span></div><div class="artifact-meta"><span>策略：${escapeHTML(call.policy_decision)}</span>${call.error_summary ? `<span>· ${escapeHTML(call.error_summary)}</span>` : ""}</div></div>`, "暂无工具调用。");
+    const status = byID("v3-status");
+    status.className = "operations-status is-healthy";
+    status.textContent = "数据已同步";
+  }
+
   function render() {
     renderSummary();
     if (!app.selectedID && app.data.workflows.length) app.selectedID = app.data.workflows[0].id;
@@ -464,6 +502,7 @@
     renderWorkflowList();
     renderDetail();
     renderOperations();
+    renderV3();
   }
 
   function setConnection(state, label) {

@@ -16,6 +16,7 @@ type DashboardData struct {
 	Queues      DashboardQueues     `json:"queues"`
 	Workflows   []DashboardWorkflow `json:"workflows"`
 	Failures    []DashboardFailure  `json:"failures"`
+	V3          DashboardV3         `json:"v3"`
 }
 
 type DashboardSummary struct {
@@ -55,15 +56,15 @@ type DashboardWorkflow struct {
 }
 
 type DashboardAgentRun struct {
-	ID          string     `json:"id"`
-	WorkItemID  string     `json:"work_item_id,omitempty"`
-	AgentType   string     `json:"agent_type"`
-	RunNumber   int        `json:"run_number"`
-	Status      string     `json:"status"`
-	Model       string     `json:"model"`
-	ErrorSummary string    `json:"error_summary,omitempty"`
-	StartedAt   time.Time  `json:"started_at"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	ID           string     `json:"id"`
+	WorkItemID   string     `json:"work_item_id,omitempty"`
+	AgentType    string     `json:"agent_type"`
+	RunNumber    int        `json:"run_number"`
+	Status       string     `json:"status"`
+	Model        string     `json:"model"`
+	ErrorSummary string     `json:"error_summary,omitempty"`
+	StartedAt    time.Time  `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 }
 
 type DashboardWorkItem struct {
@@ -166,6 +167,9 @@ func (s *Store) Dashboard(ctx context.Context, limit int) (DashboardData, error)
 		return DashboardData{}, err
 	}
 	if err := s.loadDashboardFailures(ctx, &result); err != nil {
+		return DashboardData{}, err
+	}
+	if err := s.loadDashboardV3(ctx, &result.V3, limit); err != nil {
 		return DashboardData{}, err
 	}
 	return result, nil

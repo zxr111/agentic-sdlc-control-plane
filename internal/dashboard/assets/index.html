@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'">
-  <title>AI Factory Control Room</title>
+  <title>AI 软件工厂控制台</title>
   <link rel="stylesheet" href="/dashboard/assets/app.css">
 </head>
 <body>
@@ -16,17 +16,17 @@
           <span></span><span></span><span></span>
         </span>
         <div>
-          <p class="eyebrow">AI Native SDLC</p>
-          <h1>Factory Control Room</h1>
+          <p class="eyebrow">AI 原生软件交付</p>
+          <h1>软件工厂控制台</h1>
         </div>
       </div>
       <div class="topbar-actions">
         <span class="connection" id="connection">
           <span class="connection-dot" aria-hidden="true"></span>
-          <span id="connection-text">Connecting</span>
+          <span id="connection-text">正在连接</span>
         </span>
-        <span class="updated" id="updated-at">Not synced</span>
-        <button class="button button-secondary" id="refresh-button" type="button">Refresh</button>
+        <span class="updated" id="updated-at">尚未同步</span>
+        <button class="button button-secondary" id="refresh-button" type="button">刷新</button>
       </div>
     </header>
 
@@ -35,28 +35,28 @@
         <article class="metric">
           <div class="metric-icon metric-icon-neutral" aria-hidden="true">Σ</div>
           <div>
-            <span class="metric-label">Tracked workflows</span>
+            <span class="metric-label">工作流总数</span>
             <strong class="metric-value" id="metric-total">—</strong>
           </div>
         </article>
         <article class="metric">
           <div class="metric-icon metric-icon-running" aria-hidden="true">↻</div>
           <div>
-            <span class="metric-label">AI in progress</span>
+            <span class="metric-label">AI 执行中</span>
             <strong class="metric-value" id="metric-progress">—</strong>
           </div>
         </article>
         <article class="metric metric-gate">
           <div class="metric-icon metric-icon-gate" aria-hidden="true">◇</div>
           <div>
-            <span class="metric-label">Waiting for Engineer</span>
+            <span class="metric-label">等待工程师审批</span>
             <strong class="metric-value" id="metric-gates">—</strong>
           </div>
         </article>
         <article class="metric">
           <div class="metric-icon metric-icon-ready" aria-hidden="true">✓</div>
           <div>
-            <span class="metric-label">Ready for architecture</span>
+            <span class="metric-label">架构就绪</span>
             <strong class="metric-value" id="metric-ready">—</strong>
           </div>
         </article>
@@ -66,24 +66,24 @@
         <aside class="workflow-browser" aria-label="Workflow browser">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Live work</p>
-              <h2>Workflows</h2>
+              <p class="eyebrow">实时任务</p>
+              <h2>工作流</h2>
             </div>
             <span class="count-badge" id="workflow-count">0</span>
           </div>
           <label class="search">
             <span class="sr-only">Search workflows</span>
             <span aria-hidden="true">⌕</span>
-            <input id="search-input" type="search" placeholder="Search issue or project">
+            <input id="search-input" type="search" placeholder="搜索 Issue 或项目">
           </label>
           <div class="filter-row" role="group" aria-label="Workflow status filter">
-            <button class="filter is-active" type="button" data-filter="all">All</button>
-            <button class="filter" type="button" data-filter="gate">Needs review</button>
-            <button class="filter" type="button" data-filter="active">Running</button>
-            <button class="filter" type="button" data-filter="ready">Ready</button>
+            <button class="filter is-active" type="button" data-filter="all">全部</button>
+            <button class="filter" type="button" data-filter="gate">待审批</button>
+            <button class="filter" type="button" data-filter="active">执行中</button>
+            <button class="filter" type="button" data-filter="ready">已就绪</button>
           </div>
           <div class="workflow-list" id="workflow-list">
-            <div class="list-placeholder">Waiting for workflow data…</div>
+            <div class="list-placeholder">正在等待工作流数据…</div>
           </div>
         </aside>
 
@@ -92,9 +92,9 @@
             <div class="empty-visual" aria-hidden="true">
               <span></span><span></span><span></span>
             </div>
-            <p class="eyebrow">No workflow selected</p>
-            <h2>Choose a workflow to inspect its journey</h2>
-            <p>The control room shows current automation, Engineer Gates, source traceability, artifacts, retries, and the immutable audit trail.</p>
+            <p class="eyebrow">尚未选择工作流</p>
+            <h2>选择一个工作流查看完整交付过程</h2>
+            <p>控制台展示自动化状态、工程师门禁、来源追踪、制品、重试记录和不可变审计轨迹。</p>
           </section>
         </div>
       </section>
@@ -102,13 +102,29 @@
       <section class="operations" aria-labelledby="operations-title">
         <div class="section-heading operations-heading">
           <div>
-            <p class="eyebrow">Runtime</p>
-            <h2 id="operations-title">Queue health</h2>
+            <p class="eyebrow">运行状态</p>
+            <h2 id="operations-title">队列健康度</h2>
           </div>
-          <span class="operations-status" id="operations-status">Checking</span>
+          <span class="operations-status" id="operations-status">检查中</span>
         </div>
         <div class="queue-grid" id="queue-grid"></div>
         <div id="failure-list"></div>
+      </section>
+
+      <section class="operations" aria-labelledby="v3-title">
+        <div class="section-heading operations-heading">
+          <div><p class="eyebrow">V3 Agent 平台</p><h2 id="v3-title">治理与可观测性</h2></div>
+          <span class="operations-status" id="v3-status">正在加载</span>
+        </div>
+        <div class="queue-grid" id="v3-registry"></div>
+        <div class="detail-grid v3-grid">
+          <section class="panel"><div class="panel-title-row"><h3>Agent 用量</h3><span id="v3-usage-title"></span></div><div id="v3-usage"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>知识与项目记忆</h3></div><div id="v3-knowledge"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>近期模型路由</h3></div><div id="v3-routes"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>多 Agent 意见</h3></div><div id="v3-opinions"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>评测运行</h3></div><div id="v3-evaluations"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>工具调用审计</h3></div><div id="v3-tools"></div></section>
+        </div>
       </section>
     </main>
   </div>

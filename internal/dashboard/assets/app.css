@@ -1037,3 +1037,26 @@ a {
     transition-duration: .01ms !important;
   }
 }
+
+.v3-grid {
+  margin-top: 18px;
+}
+
+.v3-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.v3-stats span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 10px 12px;
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.v3-stats strong { color: var(--ink); }
