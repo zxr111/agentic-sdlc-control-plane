@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/evaluation"
 	"github.com/google/uuid"
 )
 
@@ -468,5 +470,61 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	hits, err = repository.SearchKnowledge(ctx, projectID, "idempotency", 0, 10)
 	if err != nil || len(hits) != 0 {
 		t.Fatalf("revoked source remained searchable %#v err=%v", hits, err)
+	}
+}
+
+func TestV3EvaluationRunIsIsolatedAndComparable(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	suiteKey := "requirement-" + uuid.NewString()
+	suiteID, err := repository.EnsureEvaluationSuite(ctx, suiteKey, "REQUIREMENT", map[string]any{"minimum": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectations := evaluation.Expectations{RequiredFields: []string{"decision", "facts"}, MinimumItems: map[string]int{"facts": 1}}
+	caseID, err := repository.UpsertEvaluationCase(ctx, suiteID, EvaluationCaseInput{Key: "case-1",
+		Input: map[string]any{"source": "synthetic"}, Expected: expectations,
+		GoldenEvidence: []string{"synthetic"}, DataSplit: "HOLDOUT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedInput, storedExpectations, err := repository.EvaluationCase(ctx, caseID)
+	if err != nil || !strings.Contains(string(storedInput), "synthetic") || len(storedExpectations.RequiredFields) != 2 {
+		t.Fatalf("case round trip failed input=%s expected=%#v err=%v", storedInput, storedExpectations, err)
+	}
+	baselineID, err := repository.StartEvaluationRun(ctx, EvaluationRunInput{SuiteID: suiteID, Shadow: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineOutput := json.RawMessage(`{"decision":"ready","facts":["fact"]}`)
+	if err := repository.RecordEvaluationOutput(ctx, baselineID, caseID, baselineOutput, "", time.Millisecond,
+		nil, evaluation.DeterministicScores(baselineOutput, expectations)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishEvaluationRun(ctx, baselineID, nil); err != nil {
+		t.Fatal(err)
+	}
+	candidateID, err := repository.StartEvaluationRun(ctx, EvaluationRunInput{SuiteID: suiteID, Shadow: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateOutput := json.RawMessage(`{"decision":"ready","facts":[]}`)
+	if err := repository.RecordEvaluationOutput(ctx, candidateID, caseID, candidateOutput, "", time.Millisecond,
+		nil, evaluation.DeterministicScores(candidateOutput, expectations)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishEvaluationRun(ctx, candidateID, nil); err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := repository.CompareEvaluationRuns(ctx, baselineID, candidateID)
+	if err != nil || comparison.Decision != "REVIEW" {
+		t.Fatalf("regression was not held for review comparison=%#v err=%v", comparison, err)
+	}
+	var workflowWrites int
+	if err := repository.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE event_type LIKE 'evaluation.%'`).Scan(&workflowWrites); err != nil {
+		t.Fatal(err)
+	}
+	if workflowWrites != 0 {
+		t.Fatalf("evaluation mutated workflow audit stream: %d", workflowWrites)
 	}
 }
