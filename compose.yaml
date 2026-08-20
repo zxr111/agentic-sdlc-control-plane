@@ -2,17 +2,10 @@ x-factory-environment: &factory-environment
   DATABASE_URL: postgres://factory:factory@postgres:5432/ai_sdlc_factory_test?sslmode=disable
   FACTORY_PROJECTS_FILE: /etc/factory/projects.json
   GITLAB_API_URL: ${GITLAB_API_URL:-https://git.kuainiujinke.com/api/v4}
-  GITLAB_API_TOKEN: ${GITLAB_API_TOKEN:?GITLAB_API_TOKEN is required}
-  GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:?GITLAB_WEBHOOK_SECRET is required}
-  CALLBACK_SHARED_SECRET: ${CALLBACK_SHARED_SECRET:?CALLBACK_SHARED_SECRET is required}
   CONFLUENCE_BASE_URL: ${CONFLUENCE_BASE_URL:-https://kylith.atlassian.net}
-  CONFLUENCE_EMAIL: ${CONFLUENCE_EMAIL:?CONFLUENCE_EMAIL is required}
-  CONFLUENCE_API_TOKEN: ${CONFLUENCE_API_TOKEN:?CONFLUENCE_API_TOKEN is required}
   OPENAI_API_URL: ${OPENAI_API_URL:-https://api.openai.com/v1}
-  OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
   OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
   DELIVERY_TRIGGER_URL: ${DELIVERY_TRIGGER_URL:-}
-  DELIVERY_TRIGGER_TOKEN: ${DELIVERY_TRIGGER_TOKEN:-}
   V3_REGISTRY_ENABLED: ${V3_REGISTRY_ENABLED:-false}
   V3_CONTEXT_MANIFEST_ENABLED: ${V3_CONTEXT_MANIFEST_ENABLED:-false}
   V3_EVALUATION_ENABLED: ${V3_EVALUATION_ENABLED:-false}
@@ -70,6 +63,8 @@ services:
     environment:
       <<: *factory-environment
       COMPONENT_MODE: api
+      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:?GITLAB_WEBHOOK_SECRET is required}
+      CALLBACK_SHARED_SECRET: ${CALLBACK_SHARED_SECRET:?CALLBACK_SHARED_SECRET is required}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -87,6 +82,10 @@ services:
     environment:
       <<: *factory-environment
       COMPONENT_MODE: worker
+      GITLAB_API_TOKEN: ${GITLAB_API_TOKEN:?GITLAB_API_TOKEN is required}
+      CONFLUENCE_EMAIL: ${CONFLUENCE_EMAIL:?CONFLUENCE_EMAIL is required}
+      CONFLUENCE_API_TOKEN: ${CONFLUENCE_API_TOKEN:?CONFLUENCE_API_TOKEN is required}
+      DELIVERY_TRIGGER_TOKEN: ${DELIVERY_TRIGGER_TOKEN:-}
       WORKER_ID: compose-worker
       WORKER_EVENT_TYPES: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile
     depends_on:
@@ -99,6 +98,7 @@ services:
     environment:
       <<: *factory-environment
       COMPONENT_MODE: agent-runtime
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
       WORKER_ID: compose-agent-runtime
       WORKER_EVENT_TYPES: workflow.analyze_requirement,workflow.generate_plans,workflow.generate_architecture
       WORKER_OUTBOX_ENABLED: "false"
@@ -112,6 +112,7 @@ services:
     environment:
       <<: *factory-environment
       COMPONENT_MODE: evaluation-worker
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
       WORKER_ID: compose-evaluation-worker
       WORKER_EVENT_TYPES: evaluation.run
       WORKER_OUTBOX_ENABLED: "false"
