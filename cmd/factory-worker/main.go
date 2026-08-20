@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/engine"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/tooling"
 )
 
 func main() {
@@ -43,6 +45,23 @@ func main() {
 		}
 		if err := repository.BootstrapRegistry(context.Background(), cfg.OpenAIModel, seeds); err != nil {
 			logger.Error("V3 registry bootstrap failed", "error", err)
+			os.Exit(1)
+		}
+		toolSeeds := make([]store.ToolSeed, 0, len(tooling.BuiltinTools()))
+		for _, tool := range tooling.BuiltinTools() {
+			toolSeeds = append(toolSeeds, store.ToolSeed{Key: tool.Key, DisplayName: tool.DisplayName,
+				Description: tool.Description, RiskLevel: tool.RiskLevel, AdapterType: tool.AdapterType,
+				DefaultDecision: tool.DefaultDecision, RequiresGate: tool.RequiresGate,
+				InputSchema: json.RawMessage(tool.InputSchema), OutputSchema: json.RawMessage(tool.OutputSchema)})
+		}
+		skillSeeds := make([]store.SkillSeed, 0, len(agents.BuiltinSkills()))
+		for _, skill := range agents.BuiltinSkills() {
+			skillSeeds = append(skillSeeds, store.SkillSeed{Key: skill.Key, DisplayName: skill.DisplayName,
+				Description: skill.Description, Instructions: skill.Instructions,
+				TriggerRules: map[string]any{"agent_types": skill.AgentTypes}, Scope: map[string]any{"project_allowlist_required": true}})
+		}
+		if err := repository.BootstrapGovernance(context.Background(), toolSeeds, skillSeeds); err != nil {
+			logger.Error("V3 tool and skill registry bootstrap failed", "error", err)
 			os.Exit(1)
 		}
 	}

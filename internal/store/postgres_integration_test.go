@@ -14,6 +14,7 @@ import (
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/evaluation"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/multiagent"
 	"github.com/google/uuid"
 )
 
@@ -417,6 +418,47 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	}
 	if profileVersionID == "" || promptVersionID == "" || modelVersionID == "" {
 		t.Fatalf("registry versions were not bound profile=%s prompt=%s model=%s", profileVersionID, promptVersionID, modelVersionID)
+	}
+	if err := repository.BootstrapGovernance(ctx, []ToolSeed{
+		{Key: "knowledge.search", DisplayName: "Search", RiskLevel: "L1", AdapterType: "internal",
+			DefaultDecision: "ALLOW", InputSchema: json.RawMessage(`{"type":"object"}`), OutputSchema: json.RawMessage(`{"type":"array"}`)},
+		{Key: "staging.deploy", DisplayName: "Deploy", RiskLevel: "L3", AdapterType: "outbox",
+			DefaultDecision: "ALLOW", RequiresGate: true, InputSchema: json.RawMessage(`{"type":"object"}`), OutputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Key: "production.deploy", DisplayName: "Production", RiskLevel: "L4", AdapterType: "locked",
+			DefaultDecision: "ALLOW", RequiresGate: true, InputSchema: json.RawMessage(`{"type":"object"}`), OutputSchema: json.RawMessage(`{"type":"object"}`)},
+	}, []SkillSeed{{Key: "threat-modeling", DisplayName: "Threat", Instructions: "review threats",
+		TriggerRules: map[string]any{"agent_types": []string{"SECURITY"}}, Scope: map[string]any{"allowlist": true}}}); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS",
+		Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
+	if err != nil || allowed.Decision.Action != "EXECUTE" {
+		t.Fatalf("read tool not authorized %#v err=%v", allowed, err)
+	}
+	gateRequired, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "staging.deploy",
+		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "STAGING",
+		Input: map[string]any{"sha": "abc"}, RedactedInput: map[string]any{"sha": "abc"}})
+	if err != nil || gateRequired.Decision.Action != "REQUIRE_GATE" {
+		t.Fatalf("staging gate bypass %#v err=%v", gateRequired, err)
+	}
+	production, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "production.deploy",
+		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "RELEASE",
+		Input: map[string]any{}, RedactedInput: map[string]any{}, ProductionLock: false})
+	if err != nil || production.Decision.Action != "DENY" {
+		t.Fatalf("production lock bypass %#v err=%v", production, err)
+	}
+	recorder := OpinionRecorder{Store: repository, AgentRunID: runID}
+	if err := recorder.RecordOpinion(ctx, multiagent.Opinion{Role: "SECURITY", Decision: "CHANGES_REQUESTED", Confidence: .9,
+		Summary: "risk", Findings: []string{"missing authorization"}, Evidence: []string{"source@v1"}}, true); err != nil {
+		t.Fatal(err)
+	}
+	var opinions int
+	if err := repository.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_opinions WHERE agent_run_id=$1 AND minority=true`, runID).Scan(&opinions); err != nil {
+		t.Fatal(err)
+	}
+	if opinions != 1 {
+		t.Fatalf("minority opinion not persisted: %d", opinions)
 	}
 }
 
