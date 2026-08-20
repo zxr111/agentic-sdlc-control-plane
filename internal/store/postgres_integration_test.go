@@ -1034,6 +1034,81 @@ func TestV3ImprovementCandidatesRequireEvidenceAndHumanReview(t *testing.T) {
 	}
 }
 
+func TestOperationalFailuresCreateReviewOnlyImprovementClusters(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	projectID := int64(920000 + time.Now().UnixNano()%10000)
+	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(projectID, 33, "Operational learning"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactID, gateID := uuid.NewString(), uuid.NewString()
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO artifacts
+		(id,workflow_id,artifact_type,artifact_version,source_hash,content_json,markdown,model,prompt_version)
+		VALUES($1,$2,'REQUIREMENT_REVIEW',1,$3,'{}','review','model','prompt')`, artifactID, workflow.ID, strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO gates
+		(id,workflow_id,gate_type,status,artifact_id,revision,reviewer_ids,opened_at,feedback)
+		VALUES($1,$2,'REQUIREMENT','CHANGES_REQUESTED',$3,1,'[7]',CURRENT_TIMESTAMP,'needs evidence')`, gateID, workflow.ID, artifactID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO gate_decisions(gate_id,action,actor_id,actor_username,feedback)
+		VALUES($1,'REQUEST_CHANGES',7,'reviewer','needs evidence')`, gateID); err != nil {
+		t.Fatal(err)
+	}
+	workItemID, mergeRequestID, qualityRunID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO work_items
+		(id,workflow_id,work_item_key,title,state,owner_role) VALUES($1,$2,'API','API','REWORK','backend')`, workItemID, workflow.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO merge_requests
+		(id,work_item_id,gitlab_mr_iid,source_branch,target_branch,head_sha,state,draft)
+		VALUES($1,$2,7,'feature','master',$3,'opened',false)`, mergeRequestID, workItemID, strings.Repeat("d", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO quality_runs
+		(id,merge_request_id,head_sha,attempt,status) VALUES($1,$2,$3,1,'FAILED')`, qualityRunID, mergeRequestID, strings.Repeat("d", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO quality_findings
+		(id,quality_run_id,category,severity,summary,evidence) VALUES($1,$2,'SECURITY','HIGH','unsafe input','test evidence')`, uuid.NewString(), qualityRunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpsertPipelineRun(ctx, workflow.ID, workItemID, time.Now().UnixNano()%1000000,
+		"feature", strings.Repeat("d", 40), "failed", "https://example.invalid/pipeline"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO retrieval_runs
+		(id,workflow_id,query_text,filters_json,strategy,stop_reason,finished_at)
+		VALUES($1,$2,'missing architecture','{}','HYBRID_RRF_AGENTIC_V1','query_budget_exhausted',CURRENT_TIMESTAMP)`, uuid.NewString(), workflow.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.RecordIncident(ctx, "incident-"+workflow.ID, "monitoring", workflow.ID, "high", "latency", "open", map[string]any{"safe": true}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := repository.ProposeOperationalImprovements(ctx, projectID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]bool{}
+	for _, id := range ids {
+		var candidateType, status string
+		if err := repository.db.QueryRowContext(ctx, `SELECT candidate_type,status FROM improvement_candidates WHERE id=$1`, id).Scan(&candidateType, &status); err != nil {
+			t.Fatal(err)
+		}
+		if status != "CANDIDATE" {
+			t.Fatalf("operational candidate activated without review: %s", status)
+		}
+		types[candidateType] = true
+	}
+	for _, candidateType := range []string{"PROMPT_CHANGE", "SKILL_REVISION", "RETRIEVAL_POLICY", "EVALUATION_CASE", "PROJECT_MEMORY"} {
+		if !types[candidateType] {
+			t.Fatalf("missing operational improvement type %s: %#v", candidateType, types)
+		}
+	}
+}
+
 func TestKnowledgeIndexerFindsAndClearsSnapshotBacklog(t *testing.T) {
 	repository := integrationStore(t)
 	ctx := context.Background()

@@ -462,6 +462,13 @@ func sanitizeSlug(value string) string {
 }
 
 func (e *Engine) reconcile(ctx context.Context) error {
+	if e.v3.Evaluation {
+		for projectID := range e.projects {
+			if _, err := e.store.ProposeOperationalImprovements(ctx, projectID, ""); err != nil {
+				return fmt.Errorf("cluster V3 operational improvements for project %d: %w", projectID, err)
+			}
+		}
+	}
 	workflows, err := e.store.ListReconcilableWorkflows(ctx, 100)
 	if err != nil {
 		return err
