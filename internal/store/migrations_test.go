@@ -62,6 +62,18 @@ func TestV3AgentPlatformMigrationContainsGovernedEntities(t *testing.T) {
 	}
 }
 
+func TestV3RoutingMigrationContainsHealthAndDecisionEvidence(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/004_v3_routing.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"model_health_events", "model_route_decisions"} {
+		if !strings.Contains(string(content), "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("missing routing table %s", table)
+		}
+	}
+}
+
 func TestRetryDelayIsBounded(t *testing.T) {
 	if got := retryDelay(100).Seconds(); got != 300 {
 		t.Fatalf("expected 300 seconds, got %v", got)

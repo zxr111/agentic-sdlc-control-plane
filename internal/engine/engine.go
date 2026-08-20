@@ -19,6 +19,7 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/delivery"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/multiagent"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/webhook"
 	"github.com/google/uuid"
@@ -365,7 +366,7 @@ func (e *Engine) ingestSnapshots(ctx context.Context, workflow domain.Workflow, 
 				ProjectID: workflow.GitLabProjectID, SourceType: "CONFLUENCE", SourceKey: snapshot.ConfluencePageID,
 				SourceVersion: fmt.Sprintf("%d", snapshot.Version), Title: snapshot.Title, AuthorityLevel: 100,
 				AccessScope: map[string]any{"gitlab_project_id": workflow.GitLabProjectID},
-				Content: snapshot.NormalizedText, ParentPath: snapshot.Title,
+				Content:     snapshot.NormalizedText, ParentPath: snapshot.Title,
 			})
 			if err != nil {
 				return nil, "", fmt.Errorf("index Confluence snapshot %s: %w", snapshot.ConfluencePageID, err)
@@ -425,6 +426,77 @@ func storeTrace(trace agents.Trace) store.AgentRunTrace {
 	}
 }
 
+type governedReviewObserver struct {
+	mu        sync.Mutex
+	engine    *Engine
+	workflow  domain.Workflow
+	stage     string
+	snapshots []domain.Snapshot
+	runIDs    map[string]string
+}
+
+func (o *governedReviewObserver) Start(ctx context.Context, role string) (string, error) {
+	runID, err := o.engine.startAgentRun(ctx, o.workflow, o.stage+"_"+role, o.workflow.SourceHash, o.snapshots)
+	if err == nil {
+		o.mu.Lock()
+		o.runIDs[role] = runID
+		o.mu.Unlock()
+	}
+	return runID, err
+}
+
+func (o *governedReviewObserver) Finish(ctx context.Context, runID string, trace agents.Trace, runErr error) error {
+	status := "COMPLETED"
+	if runErr != nil {
+		status = "FAILED"
+	}
+	return o.engine.store.FinishAgentRunWithTrace(ctx, runID, status, "", storeTrace(trace), runErr)
+}
+
+func (o *governedReviewObserver) RecordOpinion(ctx context.Context, opinion multiagent.Opinion, minority bool) error {
+	o.mu.Lock()
+	runID := o.runIDs[opinion.Role]
+	o.mu.Unlock()
+	if runID == "" {
+		return fmt.Errorf("missing Agent Run for opinion role %s", opinion.Role)
+	}
+	return (store.OpinionRecorder{Store: o.engine.store, AgentRunID: runID}).RecordOpinion(ctx, opinion, minority)
+}
+
+func (e *Engine) runGovernedReview(ctx context.Context, workflow domain.Workflow, stage string, snapshots []domain.Snapshot,
+	formalArtifact []byte) (multiagent.Synthesis, error) {
+	observer := &governedReviewObserver{engine: e, workflow: workflow, stage: stage, snapshots: snapshots, runIDs: map[string]string{}}
+	runner := agents.NewGovernedMultiAgentRunner(e.agents, observer)
+	_, synthesis, err := multiagent.New(runner).Execute(ctx, multiagent.Input{WorkflowID: workflow.ID, AgentType: stage,
+		AuthoritativeText: sourceText(snapshots), PrimaryArtifact: formalArtifact}, observer)
+	return synthesis, err
+}
+
+func renderGovernedReview(synthesis multiagent.Synthesis) string {
+	var out strings.Builder
+	out.WriteString("\n\n## 多 Agent 独立审查\n\n")
+	fmt.Fprintf(&out, "**Judge 决策：** `%s`\n\n%s\n\n", synthesis.Decision, synthesis.Summary)
+	if len(synthesis.Consensus) > 0 {
+		out.WriteString("### 共识\n\n")
+		for _, item := range synthesis.Consensus {
+			fmt.Fprintf(&out, "- %s\n", item)
+		}
+	}
+	if len(synthesis.Disagreements) > 0 {
+		out.WriteString("\n### 分歧与少数意见\n\n")
+		for _, opinion := range synthesis.Disagreements {
+			fmt.Fprintf(&out, "- **%s / %s：** %s\n", opinion.Role, opinion.Decision, opinion.Summary)
+		}
+	}
+	if len(synthesis.UnresolvedRisks) > 0 {
+		out.WriteString("\n### 未解决风险\n\n")
+		for _, risk := range synthesis.UnresolvedRisks {
+			fmt.Fprintf(&out, "- %s\n", risk)
+		}
+	}
+	return out.String()
+}
+
 func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Workflow, project domain.ProjectConfig,
 	snapshots []domain.Snapshot, feedback string) error {
 	runID, err := e.startAgentRun(ctx, workflow, "REQUIREMENT", combinedHash(snapshots), snapshots)
@@ -440,6 +512,15 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 	if err != nil {
 		return err
 	}
+	multiAgentMarkdown := ""
+	if e.v3.MultiAgent {
+		synthesis, reviewErr := e.runGovernedReview(ctx, workflow, "REQUIREMENT", snapshots, raw)
+		if reviewErr != nil {
+			_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), reviewErr)
+			return reviewErr
+		}
+		multiAgentMarkdown = renderGovernedReview(synthesis)
+	}
 	version, err := e.store.NextArtifactVersion(ctx, workflow.ID, domain.ArtifactRequirement)
 	if err != nil {
 		return err
@@ -447,7 +528,7 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 	artifact := domain.Artifact{
 		ID: uuid.NewString(), WorkflowID: workflow.ID, Type: domain.ArtifactRequirement,
 		Version: version, SourceHash: combinedHash(snapshots), Content: raw,
-		Markdown: agents.RenderRequirement(review, snapshots), Model: e.agents.Model(),
+		Markdown: agents.RenderRequirement(review, snapshots) + multiAgentMarkdown, Model: e.agents.Model(),
 		Prompt: "requirement-review-v1", GeneratedAt: time.Now().UTC(),
 	}
 	gate := domain.NewGate(workflow.ID, domain.GateRequirement, artifact.ID, version, project.ReviewerIDs[domain.GateRequirement])
@@ -998,6 +1079,15 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 	if err != nil {
 		return err
 	}
+	multiAgentMarkdown := ""
+	if e.v3.MultiAgent {
+		synthesis, reviewErr := e.runGovernedReview(ctx, workflow, "ARCHITECTURE", snapshots, raw)
+		if reviewErr != nil {
+			_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), reviewErr)
+			return reviewErr
+		}
+		multiAgentMarkdown = renderGovernedReview(synthesis)
+	}
 	version, err := e.store.NextArtifactVersion(ctx, workflow.ID, domain.ArtifactArchitecture)
 	if err != nil {
 		return err
@@ -1005,7 +1095,7 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 	artifact := domain.Artifact{
 		ID: uuid.NewString(), WorkflowID: workflow.ID, Type: domain.ArtifactArchitecture,
 		Version: version, SourceHash: workflow.SourceHash, Content: raw,
-		Markdown: agents.RenderArchitecture(value), Model: e.agents.Model(),
+		Markdown: agents.RenderArchitecture(value) + multiAgentMarkdown, Model: e.agents.Model(),
 		Prompt: "architecture-v2", GeneratedAt: time.Now().UTC(),
 	}
 	project := e.projects[workflow.GitLabProjectID]
