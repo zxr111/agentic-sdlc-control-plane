@@ -1218,6 +1218,16 @@ func (s *Store) CompleteObservation(ctx context.Context, workflowID string, resu
 }
 
 func (s *Store) StartAgentRun(ctx context.Context, workflowID, workItemID, agentType, model, inputHash string) (string, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		id, err := s.startAgentRunOnce(ctx, workflowID, workItemID, agentType, model, inputHash)
+		if err == nil || !serializationFailure(err) {
+			return id, err
+		}
+	}
+	return "", errors.New("could not allocate Agent Run number after serialization retries")
+}
+
+func (s *Store) startAgentRunOnce(ctx context.Context, workflowID, workItemID, agentType, model, inputHash string) (string, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return "", err
@@ -1240,12 +1250,18 @@ func (s *Store) StartAgentRun(ctx context.Context, workflowID, workItemID, agent
 	}
 	id := uuid.NewString()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs
-		(id,workflow_id,work_item_id,agent_type,run_number,status,model,input_hash)
-		VALUES ($1,$2,$3,$4,$5,'RUNNING',$6,$7)`,
+		(id,workflow_id,work_item_id,agent_type,run_number,status,model,input_hash,lifecycle_phase)
+		VALUES ($1,$2,$3,$4,$5,'RUNNING',$6,$7,'RUNNING')`,
 		id, workflowID, workItem, agentType, runNumber, model, inputHash); err != nil {
 		return "", err
 	}
 	return id, tx.Commit()
+}
+
+func serializationFailure(err error) bool {
+	type sqlStateError interface{ SQLState() string }
+	var state sqlStateError
+	return errors.As(err, &state) && state.SQLState() == "40001"
 }
 
 func (s *Store) FinishAgentRun(ctx context.Context, id, status, artifactID string, runError error) error {
@@ -1294,8 +1310,15 @@ type AgentRunTrace struct {
 }
 
 func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifactID string, trace AgentRunTrace, runError error) error {
+	if status == "FAILED" && errors.Is(runError, context.Canceled) {
+		status = "CANCELLED"
+	}
 	if status == "COMPLETED" {
+		if err := s.beginAgentRunValidation(ctx, id); err != nil {
+			return err
+		}
 		if err := s.validateAgentRunCompletion(ctx, id, trace); err != nil {
+			_ = s.failAgentRunValidation(ctx, id, err)
 			return err
 		}
 	}
@@ -1307,15 +1330,33 @@ func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifac
 	if runError != nil {
 		errorSummary = redactError(runError)
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET status=$1,output_artifact_id=$2,
-		error_summary=$3,provider_response_id=$4,input_tokens=$5,cached_tokens=$6,output_tokens=$7,
-		reasoning_tokens=$8,estimated_cost_microunits=$9,latency_ms=$10,finish_reason=$11,provider_model_id=$12,
-		model_version_id=COALESCE((SELECT id FROM model_versions WHERE model_key=$13 AND status='ACTIVE' ORDER BY created_at DESC LIMIT 1),model_version_id),
-		finished_at=CURRENT_TIMESTAMP WHERE id=$14`,
-		status, artifact, errorSummary, trace.ProviderResponseID, trace.InputTokens, trace.CachedTokens,
+	lifecyclePhase := "TERMINAL_FAILED"
+	if status == "COMPLETED" {
+		lifecyclePhase = "COMPLETED"
+	} else if status == "CANCELLED" {
+		lifecyclePhase = "CANCELLED"
+	} else if status == "FAILED" && retryableAgentRunError(runError) {
+		lifecyclePhase = "RETRYABLE_FAILED"
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET status=$1,lifecycle_phase=$2,output_artifact_id=$3,
+		error_summary=$4,provider_response_id=$5,input_tokens=$6,cached_tokens=$7,output_tokens=$8,
+		reasoning_tokens=$9,estimated_cost_microunits=$10,latency_ms=$11,finish_reason=$12,provider_model_id=$13,
+		model_version_id=COALESCE((SELECT id FROM model_versions WHERE model_key=$14 AND status='ACTIVE' ORDER BY created_at DESC LIMIT 1),model_version_id),
+		finished_at=CURRENT_TIMESTAMP WHERE id=$15`,
+		status, lifecyclePhase, artifact, errorSummary, trace.ProviderResponseID, trace.InputTokens, trace.CachedTokens,
 		trace.OutputTokens, trace.ReasoningTokens, trace.EstimatedCost, trace.LatencyMS, trace.FinishReason, trace.ProviderModelID, trace.SelectedModelKey, id)
 	if err != nil {
 		return err
+	}
+	stepStatus := "FAILED"
+	if status == "COMPLETED" {
+		stepStatus = "COMPLETED"
+	} else if status == "CANCELLED" {
+		stepStatus = "CANCELLED"
+	}
+	if _, stepErr := s.db.ExecContext(ctx, `UPDATE agent_steps SET status=$1,finished_at=CURRENT_TIMESTAMP
+		WHERE agent_run_id=$2 AND status='RUNNING'`, stepStatus, id); stepErr != nil {
+		return stepErr
 	}
 	if trace.SelectedModelKey != "" {
 		tx, txErr := s.db.BeginTx(ctx, nil)
@@ -1344,6 +1385,22 @@ func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifac
 	return err
 }
 
+func retryableAgentRunError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"http 429", "http 500", "http 502", "http 503", "http 504", "timeout", "connection reset", "temporarily unavailable"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) validateAgentRunCompletion(ctx context.Context, id string, trace AgentRunTrace) error {
 	var governed bool
 	var profileReady, promptReady, modelReady bool
@@ -1366,7 +1423,10 @@ func (s *Store) validateAgentRunCompletion(ctx context.Context, id string, trace
 	if strings.TrimSpace(trace.ProviderResponseID) == "" || strings.TrimSpace(trace.FinishReason) == "" {
 		return errors.New("governed Agent Run is missing provider completion evidence")
 	}
-	var unsettledTools, invalidContext int
+	if trace.InputTokens <= 0 || trace.OutputTokens <= 0 {
+		return errors.New("governed Agent Run is missing provider usage evidence")
+	}
+	var unsettledTools, invalidContext, invalidSources int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_calls
 		WHERE agent_run_id=$1 AND status NOT IN ('COMPLETED','FAILED','DENY','REQUIRE_GATE','QUEUED')`, id).Scan(&unsettledTools); err != nil {
 		return err
@@ -1375,11 +1435,71 @@ func (s *Store) validateAgentRunCompletion(ctx context.Context, id string, trace
 		WHERE ar.id=$1 AND (ce.content_hash='' OR ce.citation_json IS NULL OR ce.citation_json='{}'::jsonb)`, id).Scan(&invalidContext); err != nil {
 		return err
 	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM context_entries ce JOIN agent_runs ar ON ar.context_manifest_id=ce.context_manifest_id
+		WHERE ar.id=$1 AND CASE ce.source_type
+			WHEN 'CONFLUENCE_SNAPSHOT' THEN NOT EXISTS(SELECT 1 FROM source_snapshots ss WHERE ss.id=ce.source_id AND ss.workflow_id=ar.workflow_id)
+			WHEN 'KNOWLEDGE_CHUNK' THEN NOT EXISTS(SELECT 1 FROM knowledge_chunks kc JOIN knowledge_versions kv ON kv.id=kc.knowledge_version_id
+				JOIN knowledge_documents kd ON kd.id=kv.document_id WHERE kc.id=ce.source_id AND kc.content_hash=ce.content_hash AND kv.status='ACTIVE' AND kd.status='ACTIVE')
+			WHEN 'PROJECT_MEMORY' THEN NOT EXISTS(SELECT 1 FROM project_memories pm JOIN knowledge_documents kd ON kd.id=pm.source_document_id
+				WHERE pm.id=ce.source_id AND pm.status='ACTIVE' AND kd.status='ACTIVE' AND (pm.expires_at IS NULL OR pm.expires_at>CURRENT_TIMESTAMP))
+			WHEN 'SKILL_VERSION' THEN NOT EXISTS(SELECT 1 FROM skill_versions sv WHERE sv.id=ce.source_id AND sv.status='ACTIVE' AND sv.content_hash=ce.content_hash)
+			ELSE true END`, id).Scan(&invalidSources); err != nil {
+		return err
+	}
 	if unsettledTools != 0 {
 		return errors.New("governed Agent Run has unsettled tool calls")
 	}
 	if invalidContext != 0 {
 		return errors.New("governed Agent Run has context entries without hash or citation evidence")
 	}
+	if invalidSources != 0 {
+		return errors.New("governed Agent Run has context entries whose source evidence is no longer verifiable")
+	}
 	return nil
+}
+
+func (s *Store) beginAgentRunValidation(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET lifecycle_phase='VALIDATING'
+		WHERE id=$1 AND status='RUNNING' AND lifecycle_phase='RUNNING'`, id)
+	if err != nil {
+		return err
+	}
+	if count, err := result.RowsAffected(); err != nil || count != 1 {
+		if err != nil {
+			return err
+		}
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_steps SET status='COMPLETED',finished_at=CURRENT_TIMESTAMP
+		WHERE agent_run_id=$1 AND step_type='MODEL_RESPONSE' AND status='RUNNING'`, id); err != nil {
+		return err
+	}
+	if err := insertAgentStep(ctx, tx, id, "VALIDATION", "RUNNING", nil); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) failAgentRunValidation(ctx context.Context, id string, validationErr error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status='FAILED',lifecycle_phase='TERMINAL_FAILED',
+		error_summary=$1,finished_at=CURRENT_TIMESTAMP WHERE id=$2 AND status='RUNNING' AND lifecycle_phase='VALIDATING'`,
+		redactError(validationErr), id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_steps SET status='FAILED',finished_at=CURRENT_TIMESTAMP,
+		metadata_json=jsonb_set(metadata_json,'{error_summary}',to_jsonb($1::text))
+		WHERE agent_run_id=$2 AND status='RUNNING'`, redactError(validationErr), id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

@@ -35,7 +35,8 @@ func main() {
 		os.Exit(1)
 	}
 	defer repository.Close()
-	if cfg.V3.Registry {
+	registryOwner := cfg.ComponentMode == "worker" || cfg.ComponentMode == "legacy"
+	if cfg.V3.Registry && registryOwner {
 		definitions := agents.BuiltinDefinitions()
 		seeds := make([]store.RegistryDefinition, 0, len(definitions))
 		for _, definition := range definitions {
@@ -66,6 +67,21 @@ func main() {
 		}
 		if err := repository.BootstrapGovernance(context.Background(), toolSeeds, skillSeeds); err != nil {
 			logger.Error("V3 tool and skill registry bootstrap failed", "error", err)
+			os.Exit(1)
+		}
+		if cfg.V3.Evaluation {
+			if _, err := repository.BootstrapSecurityEvaluationSuite(context.Background()); err != nil {
+				logger.Error("V3 security evaluation bootstrap failed", "error", err)
+				os.Exit(1)
+			}
+		}
+	}
+	if cfg.V3.Registry && !registryOwner {
+		waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Minute)
+		err := repository.WaitForRegistryRuntime(waitCtx, 2*time.Second)
+		cancelWait()
+		if err != nil {
+			logger.Error("V3 registry did not become ready", "error", err)
 			os.Exit(1)
 		}
 	}

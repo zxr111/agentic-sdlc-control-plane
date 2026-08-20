@@ -46,6 +46,8 @@ type DashboardV3AgentRun struct {
 	WorkflowID              string    `json:"workflow_id"`
 	AgentType               string    `json:"agent_type"`
 	Status                  string    `json:"status"`
+	LifecyclePhase          string    `json:"lifecycle_phase"`
+	StepCount               int       `json:"step_count"`
 	ProfileVersionID        string    `json:"profile_version_id,omitempty"`
 	PromptVersionID         string    `json:"prompt_version_id,omitempty"`
 	ModelVersionID          string    `json:"model_version_id,omitempty"`
@@ -318,10 +320,11 @@ func nullText(value sql.NullString) string {
 }
 
 func (s *Store) loadDashboardV3Runs(ctx context.Context, result *DashboardV3, limit int) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id::text,workflow_id::text,agent_type,status,
+	rows, err := s.db.QueryContext(ctx, `SELECT ar.id::text,ar.workflow_id::text,ar.agent_type,ar.status,ar.lifecycle_phase,
 		agent_profile_version_id::text,prompt_version_id::text,model_version_id::text,context_manifest_id::text,
-		input_tokens,output_tokens,estimated_cost_microunits,latency_ms,started_at
-		FROM agent_runs ORDER BY started_at DESC LIMIT $1`, limit)
+		input_tokens,output_tokens,estimated_cost_microunits,latency_ms,ar.started_at,
+		(SELECT COUNT(*) FROM agent_steps ast WHERE ast.agent_run_id=ar.id)
+		FROM agent_runs ar ORDER BY ar.started_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return err
 	}
@@ -329,8 +332,8 @@ func (s *Store) loadDashboardV3Runs(ctx context.Context, result *DashboardV3, li
 	for rows.Next() {
 		var item DashboardV3AgentRun
 		var profile, prompt, model, manifest sql.NullString
-		if err := rows.Scan(&item.ID, &item.WorkflowID, &item.AgentType, &item.Status, &profile, &prompt, &model, &manifest,
-			&item.InputTokens, &item.OutputTokens, &item.EstimatedCostMicrounits, &item.LatencyMS, &item.StartedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.WorkflowID, &item.AgentType, &item.Status, &item.LifecyclePhase, &profile, &prompt, &model, &manifest,
+			&item.InputTokens, &item.OutputTokens, &item.EstimatedCostMicrounits, &item.LatencyMS, &item.StartedAt, &item.StepCount); err != nil {
 			return err
 		}
 		item.ProfileVersionID = nullText(profile)

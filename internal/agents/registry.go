@@ -22,6 +22,9 @@ func BuiltinDefinitions() []Definition {
 		{AgentType: "MULTIAGENT_CRITIC", PromptKey: "multiagent-critic", SchemaName: "agent_opinion_v1", DisplayName: "多 Agent Critic", Instructions: roleInstructions("CRITIC", "software delivery"), OutputSchema: opinionSchema},
 		{AgentType: "MULTIAGENT_SECURITY_RELIABILITY", PromptKey: "multiagent-security-reliability", SchemaName: "agent_opinion_v1", DisplayName: "多 Agent Security/Reliability", Instructions: roleInstructions("SECURITY_RELIABILITY", "software delivery"), OutputSchema: opinionSchema},
 		{AgentType: "MULTIAGENT_JUDGE", PromptKey: "multiagent-judge", SchemaName: "agent_synthesis_v1", DisplayName: "多 Agent Judge", Instructions: multiAgentJudgeInstructions, OutputSchema: synthesisSchema},
+		{AgentType: "QUALITY_REVIEWER", PromptKey: "quality-evidence-review", SchemaName: "agent_opinion_v1", DisplayName: "质量证据审查 Agent", Instructions: roleInstructions("QUALITY", "quality evidence"), OutputSchema: opinionSchema},
+		{AgentType: "RELEASE_RISK_REVIEWER", PromptKey: "release-risk-review", SchemaName: "agent_opinion_v1", DisplayName: "发布风险审查 Agent", Instructions: roleInstructions("RELEASE", "release risk"), OutputSchema: opinionSchema},
+		{AgentType: "INCIDENT_REVIEWER", PromptKey: "incident-review", SchemaName: "agent_opinion_v1", DisplayName: "事故分析 Agent", Instructions: roleInstructions("INCIDENT", "incident evidence"), OutputSchema: opinionSchema},
 	}
 }
 

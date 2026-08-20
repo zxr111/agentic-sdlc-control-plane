@@ -53,6 +53,9 @@ func TestAgenticKnowledgeToolUsesAuthoritativeScopeAndTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := repository.BeginAgentRunContext(ctx, runID); err != nil {
+		t.Fatal(err)
+	}
 	policyID, err := repository.CreateToolPolicyCandidate(ctx, store.ToolPolicyCandidateInput{ToolKey: "knowledge.search",
 		ProjectID: &projectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State), Decision: "ALLOW", Conditions: map[string]any{}})
 	if err != nil {

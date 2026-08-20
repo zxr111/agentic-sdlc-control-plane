@@ -249,12 +249,19 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 	if err != nil {
 		return "", "", err
 	}
+	if err := e.store.BeginAgentRunContext(ctx, runID); err != nil {
+		return "", "", err
+	}
 	defer func() {
 		if resultErr != nil {
 			_ = e.store.FinishAgentRun(ctx, runID, "FAILED", "", resultErr)
 		}
 	}()
-	contextText, transmittedSnapshots := boundedSourceText(snapshots, 8000)
+	contextTokenLimit, err := e.store.AgentRunContextTokenLimit(ctx, runID)
+	if err != nil {
+		return "", "", err
+	}
+	contextText, transmittedSnapshots := boundedSourceText(snapshots, contextTokenLimit)
 	manifestID := ""
 	if e.v3.ContextManifest {
 		entries := make([]store.ContextEntryInput, 0, len(snapshots))
@@ -354,6 +361,8 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 		if err := e.store.BindAgentRunContext(ctx, runID, manifestID); err != nil {
 			return "", "", err
 		}
+	} else if err := e.store.BeginAgentRunExecution(ctx, runID); err != nil {
+		return "", "", err
 	}
 	return runID, contextText, nil
 }

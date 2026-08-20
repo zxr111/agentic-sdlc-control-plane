@@ -452,6 +452,7 @@
       <span>推理 Token<strong>${usage.reasoning_tokens.toLocaleString()}</strong></span>
       <span>估算成本（微单位）<strong>${usage.estimated_cost_microunits.toLocaleString()}</strong></span>
       <span>平均延迟<strong>${usage.average_latency_ms} ms</strong></span></div>`;
+    byID("v3-agent-runs").innerHTML = compactList(v3.agent_runs, run => `<div class="artifact-card"><div class="panel-title-row"><p class="artifact-name">${escapeHTML(run.agent_type)}</p><span class="artifact-type">${escapeHTML(run.lifecycle_phase)}</span></div><div class="artifact-meta"><span>${run.step_count} 个步骤</span><span>·</span><span>${run.input_tokens + run.output_tokens} Tokens</span><span>·</span><span>${run.latency_ms} ms</span></div></div>`, "暂无 Agent 生命周期记录。");
     const knowledge = v3.knowledge;
     byID("v3-knowledge").innerHTML = `<div class="v3-stats">
       <span>有效文档<strong>${knowledge.active_documents}</strong></span><span>有效版本<strong>${knowledge.active_versions}</strong></span>

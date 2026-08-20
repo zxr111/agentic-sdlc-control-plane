@@ -30,7 +30,7 @@ verify_postgres:
   stage: verify
   image: golang:1.25-alpine
   services:
-    - name: postgres:16-alpine
+    - name: pgvector/pgvector:pg16
       alias: postgres
   variables:
     POSTGRES_DB: ai_sdlc_factory_test
@@ -38,7 +38,7 @@ verify_postgres:
     POSTGRES_PASSWORD: factory
     DATABASE_TEST_URL: "postgres://factory:factory@postgres:5432/ai_sdlc_factory_test?sslmode=disable"
   script:
-    - go test -tags=integration ./internal/store
+    - go test -tags=integration -count=1 ./internal/store ./internal/engine ./internal/toolgateway
 
 verify_manifests:
   stage: verify
@@ -79,7 +79,7 @@ deploy_test:
   before_script:
     - apk add --no-cache kubectl
     - |
-      required_variables="DATABASE_URL GITLAB_API_TOKEN GITLAB_WEBHOOK_SECRET CALLBACK_SHARED_SECRET CONFLUENCE_EMAIL CONFLUENCE_API_TOKEN OPENAI_API_KEY CI_DEPLOY_USER CI_DEPLOY_PASSWORD"
+      required_variables="DATABASE_URL AGENT_DATABASE_URL EVALUATION_DATABASE_URL GITLAB_API_TOKEN GITLAB_WEBHOOK_SECRET CALLBACK_SHARED_SECRET CONFLUENCE_EMAIL CONFLUENCE_API_TOKEN OPENAI_API_KEY AGENT_RUNTIME_SHARED_SECRET CI_DEPLOY_USER CI_DEPLOY_PASSWORD"
       missing_variables=""
       for variable_name in $required_variables; do
         eval "variable_value=\${$variable_name:-}"
@@ -104,12 +104,15 @@ deploy_test:
     - >-
       kubectl -n "$TEST_NAMESPACE" create secret generic ai-sdlc-factory-secrets
       --from-literal=DATABASE_URL="$DATABASE_URL"
+      --from-literal=AGENT_DATABASE_URL="$AGENT_DATABASE_URL"
+      --from-literal=EVALUATION_DATABASE_URL="$EVALUATION_DATABASE_URL"
       --from-literal=GITLAB_API_TOKEN="$GITLAB_API_TOKEN"
       --from-literal=GITLAB_WEBHOOK_SECRET="$GITLAB_WEBHOOK_SECRET"
       --from-literal=CALLBACK_SHARED_SECRET="$CALLBACK_SHARED_SECRET"
       --from-literal=CONFLUENCE_EMAIL="$CONFLUENCE_EMAIL"
       --from-literal=CONFLUENCE_API_TOKEN="$CONFLUENCE_API_TOKEN"
       --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY"
+      --from-literal=AGENT_RUNTIME_SHARED_SECRET="$AGENT_RUNTIME_SHARED_SECRET"
       --from-literal=DELIVERY_TRIGGER_TOKEN="${DELIVERY_TRIGGER_TOKEN:-}"
       --dry-run=client -o yaml | kubectl apply -f -
     - kubectl -n "$TEST_NAMESPACE" delete job ai-sdlc-factory-migrate --ignore-not-found=true
@@ -120,6 +123,11 @@ deploy_test:
     - kubectl -n "$TEST_NAMESPACE" wait --for=condition=complete job/ai-sdlc-factory-migrate --timeout=300s
     - kubectl -n "$TEST_NAMESPACE" rollout status deployment/ai-sdlc-factory-api --timeout=300s
     - kubectl -n "$TEST_NAMESPACE" rollout status deployment/ai-sdlc-factory-worker --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" rollout status deployment/ai-sdlc-factory-agent-runtime --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" rollout status deployment/ai-sdlc-factory-agent-dispatcher --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" rollout status deployment/ai-sdlc-factory-evaluation-worker --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" rollout status deployment/ai-sdlc-factory-knowledge-indexer --timeout=300s
+    - kubectl -n "$TEST_NAMESPACE" get --raw /api/v1/namespaces/$TEST_NAMESPACE/services/http:ai-sdlc-factory:80/proxy/readyz >/dev/null
     - kubectl -n "$TEST_NAMESPACE" get deployment,pod,service,ingress -l app.kubernetes.io/name=ai-sdlc-factory
   after_script:
     - kubectl -n "$TEST_NAMESPACE" get pods -l app.kubernetes.io/name=ai-sdlc-factory -o wide || true

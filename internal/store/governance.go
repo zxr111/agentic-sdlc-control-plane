@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/multiagent"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/tooling"
@@ -223,15 +225,20 @@ type ToolAuthorization struct {
 	AdapterType   string
 	AdapterConfig json.RawMessage
 	InputSchema   json.RawMessage
+	OutputSchema  json.RawMessage
 	Decision      tooling.Decision
 }
 
 func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorizationRequest) (ToolAuthorization, error) {
 	var workflowID, authoritativeAgentType, authoritativeWorkflowState string
 	var authoritativeProjectID int64
-	if err := s.db.QueryRowContext(ctx, `SELECT ar.workflow_id::text,w.gitlab_project_id,ar.agent_type,w.state
-		FROM agent_runs ar JOIN workflows w ON w.id=ar.workflow_id WHERE ar.id=$1`, request.AgentRunID).
-		Scan(&workflowID, &authoritativeProjectID, &authoritativeAgentType, &authoritativeWorkflowState); err != nil {
+	var profileToolPolicy, profileBudget []byte
+	if err := s.db.QueryRowContext(ctx, `SELECT ar.workflow_id::text,w.gitlab_project_id,ar.agent_type,w.state,
+		COALESCE(apv.tool_policy,'{}'::jsonb),COALESCE(apv.budget_json,'{}'::jsonb)
+		FROM agent_runs ar JOIN workflows w ON w.id=ar.workflow_id
+		LEFT JOIN agent_profile_versions apv ON apv.id=ar.agent_profile_version_id
+		WHERE ar.id=$1 AND ar.status='RUNNING' AND ar.lifecycle_phase IN ('CONTEXT_BUILDING','RUNNING')`, request.AgentRunID).
+		Scan(&workflowID, &authoritativeProjectID, &authoritativeAgentType, &authoritativeWorkflowState, &profileToolPolicy, &profileBudget); err != nil {
 		if err == sql.ErrNoRows {
 			return ToolAuthorization{}, ErrNotFound
 		}
@@ -244,9 +251,9 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 	request.AgentType = authoritativeAgentType
 	request.WorkflowState = authoritativeWorkflowState
 	var versionID, risk, rule, adapterType string
-	var adapterConfig, conditionsRaw, inputSchema []byte
+	var adapterConfig, conditionsRaw, inputSchema, outputSchema []byte
 	var requiresGate bool
-	err := s.db.QueryRowContext(ctx, `SELECT tv.id,tv.risk_level,COALESCE(tp.decision,'DENY'),COALESCE(tp.requires_gate,false),tv.adapter_type,tv.adapter_config,COALESCE(tp.conditions_json,'{}'::jsonb),tv.input_schema
+	err := s.db.QueryRowContext(ctx, `SELECT tv.id,tv.risk_level,COALESCE(tp.decision,'DENY'),COALESCE(tp.requires_gate,false),tv.adapter_type,tv.adapter_config,COALESCE(tp.conditions_json,'{}'::jsonb),tv.input_schema,tv.output_schema
 		FROM tool_versions tv JOIN tool_definitions td ON td.id=tv.tool_definition_id
 		LEFT JOIN LATERAL (SELECT decision,requires_gate,conditions_json FROM tool_policies
 			WHERE tool_version_id=tv.id AND (project_id IS NULL OR project_id=$2)
@@ -254,7 +261,7 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 			AND status='ACTIVE'
 			ORDER BY (project_id IS NOT NULL) DESC,(agent_type<>'*') DESC,(workflow_state<>'*') DESC LIMIT 1) tp ON true
 		WHERE td.tool_key=$1 AND tv.status='ACTIVE' ORDER BY tv.version DESC LIMIT 1`, request.ToolKey, request.ProjectID, request.AgentType, request.WorkflowState).
-		Scan(&versionID, &risk, &rule, &requiresGate, &adapterType, &adapterConfig, &conditionsRaw, &inputSchema)
+		Scan(&versionID, &risk, &rule, &requiresGate, &adapterType, &adapterConfig, &conditionsRaw, &inputSchema, &outputSchema)
 	if err == sql.ErrNoRows {
 		return ToolAuthorization{}, ErrNotFound
 	}
@@ -277,6 +284,32 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 	}
 	evidenceOK := conditions.MinimumEvidence == 0 || request.EvidenceVersion >= conditions.MinimumEvidence
 	budgetOK := conditions.MaximumBudget == 0 || request.BudgetMicrounits <= conditions.MaximumBudget
+	var profilePolicy struct {
+		AllowedTools []string `json:"allowed_tools"`
+	}
+	if err := json.Unmarshal(profileToolPolicy, &profilePolicy); err != nil {
+		return ToolAuthorization{}, err
+	}
+	profileToolAllowed := len(profilePolicy.AllowedTools) == 0
+	for _, toolKey := range profilePolicy.AllowedTools {
+		if toolKey == request.ToolKey {
+			profileToolAllowed = true
+			break
+		}
+	}
+	var profileLimits struct {
+		MaxToolCalls int `json:"max_tool_calls"`
+	}
+	if err := json.Unmarshal(profileBudget, &profileLimits); err != nil {
+		return ToolAuthorization{}, err
+	}
+	if profileLimits.MaxToolCalls > 0 {
+		var previousCalls int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_calls WHERE agent_run_id=$1`, request.AgentRunID).Scan(&previousCalls); err != nil {
+			return ToolAuthorization{}, err
+		}
+		budgetOK = budgetOK && previousCalls < profileLimits.MaxToolCalls
+	}
 	hasGate := false
 	if request.GateID != "" {
 		var gateRevision int
@@ -297,6 +330,9 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 	if !hardToolScopeAllowed(request.ToolKey, authoritativeAgentType, authoritativeWorkflowState) {
 		decision = tooling.Decision{Action: "DENY", Reason: "tool is outside the hard Agent and workflow-stage boundary"}
 	}
+	if !profileToolAllowed {
+		decision = tooling.Decision{Action: "DENY", Reason: "tool is not allowed by the immutable Agent Profile version"}
+	}
 	if requiresGate && request.GateID == "" && decision.Action != "DENY" {
 		decision = tooling.Decision{Action: "REQUIRE_GATE", Reason: "tool policy requires an Engineer Gate", RequiresGate: true}
 	}
@@ -314,16 +350,35 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 	if decision.Action == "DENY" || decision.Action == "REQUIRE_GATE" {
 		status = decision.Action
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO tool_calls
-		(id,agent_run_id,tool_version_id,input_hash,redacted_input_json,policy_decision,gate_id,status,error_summary,finished_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CURRENT_TIMESTAMP)`, callID, request.AgentRunID, versionID,
-		hex.EncodeToString(digest[:]), string(redacted), decision.Action, nullableUUID(request.GateID), status, decision.Reason)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return ToolAuthorization{}, err
+	}
+	defer tx.Rollback()
+	stepID := uuid.NewString()
+	stepStatus := "RUNNING"
+	var stepFinished any
+	if status == "DENY" || status == "REQUIRE_GATE" {
+		stepStatus, stepFinished = status, time.Now().UTC()
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_steps(id,agent_run_id,ordinal,step_type,status,input_hash,metadata_json,finished_at)
+		SELECT $1,$2,COALESCE(MAX(ordinal),-1)+1,'TOOL_CALL',$3,$4,$5,$6 FROM agent_steps WHERE agent_run_id=$2`,
+		stepID, request.AgentRunID, stepStatus, hex.EncodeToString(digest[:]), string(redacted), stepFinished); err != nil {
+		return ToolAuthorization{}, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO tool_calls
+		(id,agent_run_id,agent_step_id,tool_version_id,input_hash,redacted_input_json,policy_decision,gate_id,status,error_summary,finished_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, callID, request.AgentRunID, stepID, versionID,
+		hex.EncodeToString(digest[:]), string(redacted), decision.Action, nullableUUID(request.GateID), status, decision.Reason, stepFinished)
+	if err != nil {
+		return ToolAuthorization{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return ToolAuthorization{}, err
 	}
 	return ToolAuthorization{CallID: callID, ToolVersionID: versionID, WorkflowID: workflowID,
 		ProjectID: authoritativeProjectID, AgentType: authoritativeAgentType, WorkflowState: authoritativeWorkflowState, AdapterType: adapterType,
-		AdapterConfig: json.RawMessage(adapterConfig), InputSchema: json.RawMessage(inputSchema), Decision: decision}, nil
+		AdapterConfig: json.RawMessage(adapterConfig), InputSchema: json.RawMessage(inputSchema), OutputSchema: json.RawMessage(outputSchema), Decision: decision}, nil
 }
 
 // hardToolScopeAllowed is a non-configurable privilege ceiling. Policies may
@@ -347,9 +402,11 @@ func (s *Store) EnqueueGovernedToolOutbox(ctx context.Context, callID, toolKey, 
 	defer tx.Rollback()
 	var workflowID string
 	var projectID, issueIID int64
-	if err := tx.QueryRowContext(ctx, `SELECT ar.workflow_id::text,w.gitlab_project_id,w.issue_iid FROM tool_calls tc
+	var outputSchema []byte
+	if err := tx.QueryRowContext(ctx, `SELECT ar.workflow_id::text,w.gitlab_project_id,w.issue_iid,tv.output_schema FROM tool_calls tc
 		JOIN agent_runs ar ON ar.id=tc.agent_run_id JOIN workflows w ON w.id=ar.workflow_id
-		WHERE tc.id=$1 AND tc.policy_decision='OUTBOX' AND tc.status='AUTHORIZED'`, callID).Scan(&workflowID, &projectID, &issueIID); err != nil {
+		JOIN tool_versions tv ON tv.id=tc.tool_version_id
+		WHERE tc.id=$1 AND tc.policy_decision='OUTBOX' AND tc.status='AUTHORIZED'`, callID).Scan(&workflowID, &projectID, &issueIID, &outputSchema); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
@@ -413,6 +470,17 @@ func (s *Store) EnqueueGovernedToolOutbox(ctx context.Context, callID, toolKey, 
 	if err != nil {
 		return nil, err
 	}
+	result, err := json.Marshal(map[string]any{"status": "QUEUED", "tool_call_id": callID, "message_type": messageType})
+	if err != nil {
+		return nil, err
+	}
+	var decodedResult any
+	if err := json.Unmarshal(result, &decodedResult); err != nil {
+		return nil, err
+	}
+	if err := tooling.ValidateJSON(outputSchema, decodedResult); err != nil {
+		return nil, fmt.Errorf("tool output violates the registered schema: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO outbox_messages(dedupe_key,message_type,payload_json,last_error)
 		VALUES ($1,$2,$3,'') ON CONFLICT (dedupe_key) DO NOTHING`, "tool-call:"+callID, messageType, string(raw)); err != nil {
 		return nil, err
@@ -421,7 +489,10 @@ func (s *Store) EnqueueGovernedToolOutbox(ctx context.Context, callID, toolKey, 
 		hashBytes(raw), callID); err != nil {
 		return nil, err
 	}
-	result, _ := json.Marshal(map[string]any{"status": "QUEUED", "tool_call_id": callID, "message_type": messageType})
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_steps SET status='COMPLETED',output_hash=$1,finished_at=CURRENT_TIMESTAMP
+		WHERE id=(SELECT agent_step_id FROM tool_calls WHERE id=$2)`, hashBytes(raw), callID); err != nil {
+		return nil, err
+	}
 	return result, tx.Commit()
 }
 
@@ -446,6 +517,14 @@ func (s *Store) FinishToolCall(ctx context.Context, callID, status, resultHash s
 	}
 	if rows != 1 {
 		return ErrNotFound
+	}
+	stepStatus := status
+	if status == "QUEUED" {
+		stepStatus = "COMPLETED"
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE agent_steps SET status=$1,output_hash=$2,metadata_json=jsonb_set(metadata_json,'{error_summary}',to_jsonb($3::text)),finished_at=CURRENT_TIMESTAMP
+		WHERE id=(SELECT agent_step_id FROM tool_calls WHERE id=$4)`, stepStatus, resultHash, errorSummary, callID); err != nil {
+		return err
 	}
 	return nil
 }

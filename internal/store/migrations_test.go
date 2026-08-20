@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -132,6 +134,26 @@ func TestV3ToolRetrievalTraceMigrationBindsAgentRun(t *testing.T) {
 	if !strings.Contains(source, "retrieval_runs ADD COLUMN IF NOT EXISTS agent_run_id") ||
 		!strings.Contains(source, "idx_retrieval_runs_agent_run") {
 		t.Fatal("tool retrieval trace migration does not bind retrieval evidence to Agent Run")
+	}
+}
+
+func TestV3AgentRunLifecycleMigration(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/013_v3_agent_run_lifecycle.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	if !strings.Contains(source, "lifecycle_phase") || !strings.Contains(source, "idx_agent_runs_lifecycle_phase") {
+		t.Fatal("Agent Run lifecycle migration is incomplete")
+	}
+}
+
+func TestAgentRunFailureClassification(t *testing.T) {
+	if !retryableAgentRunError(context.DeadlineExceeded) || !retryableAgentRunError(errors.New("provider returned HTTP 503")) {
+		t.Fatal("transient Agent Run failures were not classified as retryable")
+	}
+	if retryableAgentRunError(errors.New("JSON Schema validation failed")) {
+		t.Fatal("terminal validation failure was classified as retryable")
 	}
 }
 

@@ -45,3 +45,13 @@ func TestMCPClientRejectsOversizedAndErrorResponses(t *testing.T) {
 		t.Fatal("oversized response accepted")
 	}
 }
+
+func TestToolOutputMustMatchRegisteredSchema(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}}`)
+	if err := validateOutput(schema, json.RawMessage(`{"ok":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateOutput(schema, json.RawMessage(`{"ok":"yes","leak":"data"}`)); err == nil {
+		t.Fatal("invalid MCP output bypassed the registered output schema")
+	}
+}

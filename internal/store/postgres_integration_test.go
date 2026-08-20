@@ -84,7 +84,7 @@ func TestMigrationsSupportEmptyAndV2Databases(t *testing.T) {
 			if err := target.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 				t.Fatal(err)
 			}
-			if migrationCount < 12 {
+			if migrationCount < 13 {
 				t.Fatalf("expected all migrations, got %d", migrationCount)
 			}
 			if scenario.v2Fixture {
@@ -589,8 +589,14 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	traceSnapshotID := uuid.NewString()
+	if err := repository.SaveSnapshot(ctx, domain.Snapshot{ID: traceSnapshotID, WorkflowID: workflow.ID,
+		ConfluencePageID: "trace-page", Version: 1, Title: "Trace evidence", URL: "https://example.test/wiki/1",
+		ContentHash: strings.Repeat("a", 64), NormalizedText: "authoritative trace evidence", RawStorage: "authoritative trace evidence"}); err != nil {
+		t.Fatal(err)
+	}
 	manifestID, err := repository.CreateContextManifest(ctx, workflow.ID, "REQUIREMENT", "v1", []ContextEntryInput{{
-		SourceType: "CONFLUENCE_SNAPSHOT", AuthorityLevel: 100, TokenCount: 12,
+		SourceType: "CONFLUENCE_SNAPSHOT", SourceID: traceSnapshotID, AuthorityLevel: 100, TokenCount: 12,
 		Required:    true,
 		ContentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Citation:    map[string]any{"url": "https://example.test/wiki/1", "version": 1},
@@ -645,6 +651,38 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err := repository.FinishAgentRun(ctx, incompleteRunID, "COMPLETED", "", nil); err == nil {
 		t.Fatal("governed Agent Run completed without provider trace evidence")
 	}
+	var incompleteStatus, incompletePhase string
+	if err := repository.db.QueryRowContext(ctx, `SELECT status,lifecycle_phase FROM agent_runs WHERE id=$1`, incompleteRunID).
+		Scan(&incompleteStatus, &incompletePhase); err != nil {
+		t.Fatal(err)
+	}
+	if incompleteStatus != "FAILED" || incompletePhase != "TERMINAL_FAILED" {
+		t.Fatalf("invalid completion left run in status=%s phase=%s", incompleteStatus, incompletePhase)
+	}
+	lifecycleRunID, err := repository.StartAgentRunWithProfile(ctx, workflow.ID, "", "REQUIREMENT", "requirement", "test-model", "lifecycle", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.BeginAgentRunContext(ctx, lifecycleRunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.BindAgentRunContext(ctx, lifecycleRunID, manifestID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishAgentRunWithTrace(ctx, lifecycleRunID, "COMPLETED", "", trace, nil); err != nil {
+		t.Fatal(err)
+	}
+	var lifecyclePhase string
+	var lifecycleSteps, completedSteps int
+	if err := repository.db.QueryRowContext(ctx, `SELECT lifecycle_phase,
+		(SELECT COUNT(*) FROM agent_steps WHERE agent_run_id=ar.id),
+		(SELECT COUNT(*) FROM agent_steps WHERE agent_run_id=ar.id AND status='COMPLETED')
+		FROM agent_runs ar WHERE ar.id=$1`, lifecycleRunID).Scan(&lifecyclePhase, &lifecycleSteps, &completedSteps); err != nil {
+		t.Fatal(err)
+	}
+	if lifecyclePhase != "COMPLETED" || lifecycleSteps != 3 || completedSteps != 3 {
+		t.Fatalf("lifecycle phase=%s steps=%d completed=%d", lifecyclePhase, lifecycleSteps, completedSteps)
+	}
 	var required bool
 	var compression string
 	if err := repository.db.QueryRowContext(ctx, `SELECT required,compression_method FROM context_entries WHERE context_manifest_id=$1`, manifestID).Scan(&required, &compression); err != nil || !required || compression != "none" {
@@ -684,7 +722,16 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err != nil || len(blockedSkills) != 0 {
 		t.Fatalf("unlisted skill entered context=%#v err=%v", blockedSkills, err)
 	}
-	allowed, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
+	toolRunID, err := repository.StartAgentRun(ctx, workflow.ID, "", "REQUIREMENT", "test-model", "tool-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State),
+		Input: map[string]any{"query": "late"}, RedactedInput: map[string]any{"query": "late"}}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("completed Agent Run accepted a new tool call: %v", err)
+	}
+	allowed, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: toolRunID, ToolKey: "knowledge.search",
 		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State),
 		Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
 	if err != nil || allowed.Decision.Action != "EXECUTE" {
@@ -698,19 +745,19 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		`{"allowed_actors":["engineer"],"minimum_evidence_version":2,"maximum_budget_microunits":100}`, allowed.ToolVersionID); err != nil {
 		t.Fatal(err)
 	}
-	denied, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
+	denied, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: toolRunID, ToolKey: "knowledge.search",
 		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State), Actor: "agent",
 		EvidenceVersion: 1, BudgetMicrounits: 101, Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
 	if err != nil || denied.Decision.Action != "DENY" {
 		t.Fatalf("tool conditions were bypassed %#v err=%v", denied, err)
 	}
-	conditioned, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
+	conditioned, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: toolRunID, ToolKey: "knowledge.search",
 		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State), Actor: "engineer",
 		EvidenceVersion: 2, BudgetMicrounits: 100, Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
 	if err != nil || conditioned.Decision.Action != "EXECUTE" {
 		t.Fatalf("valid tool conditions rejected %#v err=%v", conditioned, err)
 	}
-	comment, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "gitlab.comment",
+	comment, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: toolRunID, ToolKey: "gitlab.comment",
 		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State), Actor: "agent",
 		Input: map[string]any{"marker": "agent-note", "body": "evidence-backed note"}, RedactedInput: map[string]any{"marker": "agent-note", "body": "evidence-backed note"}})
 	if err != nil || comment.Decision.Action != "OUTBOX" {
@@ -739,7 +786,7 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err := repository.db.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id=$1`, allowed.CallID).Scan(&toolStatus); err != nil || toolStatus != "COMPLETED" {
 		t.Fatalf("tool completion status=%s err=%v", toolStatus, err)
 	}
-	gateRequired, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "staging.deploy",
+	gateRequired, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: toolRunID, ToolKey: "staging.deploy",
 		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State),
 		Input: map[string]any{"sha": "abc"}, RedactedInput: map[string]any{"sha": "abc"}})
 	if err != nil || gateRequired.Decision.Action != "DENY" {
@@ -1226,6 +1273,30 @@ func TestV3EvaluationRunIsIsolatedAndComparable(t *testing.T) {
 	ids, err := repository.ProposeEvaluationImprovements(ctx, candidateID, 1)
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("holdout findings leaked into automatic improvements ids=%v err=%v", ids, err)
+	}
+}
+
+func TestSecurityEvaluationBootstrapIsIdempotentAndAdversarial(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	suiteID, err := repository.BootstrapSecurityEvaluationSuite(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.BootstrapSecurityEvaluationSuite(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cases, err := repository.EvaluationCases(ctx, suiteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) != 2 {
+		t.Fatalf("security evaluation cases=%d", len(cases))
+	}
+	for _, testCase := range cases {
+		if !testCase.Expectations.ForbidToolRequests || !testCase.Expectations.ForbidProductionMutation || len(testCase.Expectations.ForbiddenStrings) == 0 {
+			t.Fatalf("security case lacks exfiltration/tool constraints: %#v", testCase)
+		}
 	}
 }
 

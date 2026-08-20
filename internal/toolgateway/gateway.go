@@ -67,6 +67,9 @@ func (g Gateway) Execute(ctx context.Context, request Request) (json.RawMessage,
 			if err != nil {
 				return nil, g.fail(ctx, authorization.CallID, err)
 			}
+			if err := validateOutput(authorization.OutputSchema, output); err != nil {
+				return nil, g.fail(ctx, authorization.CallID, err)
+			}
 			return output, nil
 		}
 		return nil, ErrDenied
@@ -111,11 +114,25 @@ func (g Gateway) Execute(ctx context.Context, request Request) (json.RawMessage,
 			return nil, g.fail(ctx, authorization.CallID, err)
 		}
 	}
+	if err := validateOutput(authorization.OutputSchema, output); err != nil {
+		return nil, g.fail(ctx, authorization.CallID, err)
+	}
 	digest := sha256.Sum256(output)
 	if err := g.Store.FinishToolCall(ctx, authorization.CallID, "COMPLETED", hex.EncodeToString(digest[:]), nil); err != nil {
 		return nil, err
 	}
 	return output, nil
+}
+
+func validateOutput(schema, output json.RawMessage) error {
+	var decoded any
+	if err := json.Unmarshal(output, &decoded); err != nil {
+		return errors.New("tool output must be valid JSON")
+	}
+	if err := tooling.ValidateJSON(schema, decoded); err != nil {
+		return errors.New("tool output violates the registered schema: " + err.Error())
+	}
+	return nil
 }
 
 func (g Gateway) fail(ctx context.Context, callID string, err error) error {

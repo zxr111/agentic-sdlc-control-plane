@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -80,12 +81,19 @@ func (s *Store) BootstrapRegistry(ctx context.Context, model string, definitions
 			return err
 		}
 		profileVersionID := registryID("agent-profile-version", profileKey+":"+contentHash+":"+model)
+		allowedTools := []string{"knowledge.search", "memory.propose", "gitlab.comment"}
+		if strings.Contains(definition.AgentType, "RELEASE") {
+			allowedTools = append(allowedTools, "staging.deploy")
+		}
+		contextPolicy, _ := json.Marshal(map[string]any{"authority_order": []string{"confluence_snapshot", "approved_artifact", "project_memory"},
+			"citation_required": true, "max_source_tokens": 8000})
+		toolPolicy, _ := json.Marshal(map[string]any{"default": "deny", "allowed_tools": allowedTools})
+		budget, _ := json.Marshal(map[string]any{"max_output_tokens": 12000, "reasoning_effort": "medium", "max_tool_calls": 8})
 		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_profile_versions
 			(id,agent_profile_id,version,status,prompt_version_id,model_policy_id,context_policy,tool_policy,budget_json)
 			VALUES ($1,$2,1,'ACTIVE',$3,$4,$5,$6,$7) ON CONFLICT (agent_profile_id,version) DO NOTHING`,
 			profileVersionID, profileID, promptVersionID, policyID,
-			`{"authority_order":["confluence_snapshot","approved_artifact","project_memory"],"citation_required":true}`,
-			`{"default":"deny"}`, `{"max_output_tokens":12000,"reasoning_effort":"medium"}`); err != nil {
+			string(contextPolicy), string(toolPolicy), string(budget)); err != nil {
 			return err
 		}
 	}
@@ -274,4 +282,30 @@ func (s *Store) ActivePromptVersion(ctx context.Context, promptKey string) (Prom
 		return PromptVersionRecord{}, ErrNotFound
 	}
 	return record, err
+}
+
+func (s *Store) WaitForRegistryRuntime(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		var ready bool
+		err := s.db.QueryRowContext(ctx, `SELECT
+			EXISTS(SELECT 1 FROM model_versions WHERE status='ACTIVE') AND
+			EXISTS(SELECT 1 FROM agent_profile_versions WHERE status='ACTIVE') AND
+			EXISTS(SELECT 1 FROM tool_versions WHERE status='ACTIVE')`).Scan(&ready)
+		if err != nil {
+			return err
+		}
+		if ready {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
