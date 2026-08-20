@@ -521,7 +521,14 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 			return "", "", err
 		}
 	}
-	runID, err := e.store.StartAgentRunWithContext(ctx, workflow.ID, "", agentType, e.agents.Model(), inputHash, manifestID)
+	profileKey := strings.ToLower(agentType)
+	for _, role := range []string{"PRIMARY", "CRITIC", "SECURITY_RELIABILITY", "JUDGE"} {
+		if strings.HasSuffix(agentType, "_"+role) {
+			profileKey = "multiagent_" + strings.ToLower(role)
+			break
+		}
+	}
+	runID, err := e.store.StartAgentRunWithProfile(ctx, workflow.ID, "", agentType, profileKey, e.agents.Model(), inputHash, manifestID)
 	return runID, contextText, err
 }
 
@@ -577,7 +584,19 @@ func (o *governedReviewObserver) RecordOpinion(ctx context.Context, opinion mult
 func (e *Engine) runGovernedReview(ctx context.Context, workflow domain.Workflow, stage string, snapshots []domain.Snapshot,
 	formalArtifact []byte) (multiagent.Synthesis, error) {
 	observer := &governedReviewObserver{engine: e, workflow: workflow, stage: stage, snapshots: snapshots, runIDs: map[string]string{}}
-	runner := agents.NewGovernedMultiAgentRunner(e.agents, observer)
+	prompts := map[string]agents.RolePrompt{}
+	for role, key := range map[string]string{multiagent.RolePrimary: "multiagent-primary", multiagent.RoleCritic: "multiagent-critic", multiagent.RoleSecurity: "multiagent-security-reliability", multiagent.RoleJudge: "multiagent-judge"} {
+		active, err := e.store.ActivePromptVersion(ctx, key)
+		if err != nil {
+			return multiagent.Synthesis{}, fmt.Errorf("resolve %s prompt: %w", role, err)
+		}
+		runtime, err := e.store.PromptRuntime(ctx, active.ID)
+		if err != nil {
+			return multiagent.Synthesis{}, err
+		}
+		prompts[role] = agents.RolePrompt{Instructions: runtime.Content, Schema: runtime.OutputSchema}
+	}
+	runner := agents.NewGovernedMultiAgentRunnerWithPrompts(e.agents, observer, prompts)
 	_, synthesis, err := multiagent.New(runner).Execute(ctx, multiagent.Input{WorkflowID: workflow.ID, AgentType: stage,
 		AuthoritativeText: sourceText(snapshots), PrimaryArtifact: formalArtifact}, observer)
 	return synthesis, err

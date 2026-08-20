@@ -4,8 +4,8 @@ import "testing"
 
 func TestBuiltinDefinitionsAreCompleteAndUnique(t *testing.T) {
 	definitions := BuiltinDefinitions()
-	if len(definitions) != 5 {
-		t.Fatalf("expected five built-in agents, got %d", len(definitions))
+	if len(definitions) != 9 {
+		t.Fatalf("expected nine built-in agents, got %d", len(definitions))
 	}
 	seen := map[string]bool{}
 	for _, definition := range definitions {

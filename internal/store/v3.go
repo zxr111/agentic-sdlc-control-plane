@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -64,6 +65,10 @@ func (s *Store) CreateContextManifest(ctx context.Context, workflowID, purpose, 
 }
 
 func (s *Store) StartAgentRunWithContext(ctx context.Context, workflowID, workItemID, agentType, model, inputHash, contextManifestID string) (string, error) {
+	return s.StartAgentRunWithProfile(ctx, workflowID, workItemID, agentType, strings.ToLower(agentType), model, inputHash, contextManifestID)
+}
+
+func (s *Store) StartAgentRunWithProfile(ctx context.Context, workflowID, workItemID, agentType, profileKey, model, inputHash, contextManifestID string) (string, error) {
 	id, err := s.StartAgentRun(ctx, workflowID, workItemID, agentType, model, inputHash)
 	if err != nil {
 		return id, err
@@ -81,7 +86,7 @@ func (s *Store) StartAgentRunWithContext(ctx context.Context, workflowID, workIt
 		prompt_version_id=(SELECT apv.prompt_version_id FROM agent_profile_versions apv JOIN agent_profiles ap ON ap.id=apv.agent_profile_id
 			WHERE ap.profile_key=LOWER($2) AND apv.status='ACTIVE' ORDER BY apv.version DESC LIMIT 1),
 		model_version_id=(SELECT mv.id FROM model_versions mv WHERE mv.model_key=$3 AND mv.status='ACTIVE' ORDER BY mv.created_at DESC LIMIT 1)
-		WHERE id=$1`, id, agentType, model); err != nil {
+		WHERE id=$1`, id, profileKey, model); err != nil {
 		return "", err
 	}
 	return id, nil
