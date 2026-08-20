@@ -348,6 +348,36 @@ func TestCodexDispatchIsIdempotentAndHasNoLease(t *testing.T) {
 func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	repository := integrationStore(t)
 	ctx := context.Background()
+	if err := repository.BootstrapRegistry(ctx, "test-model", []RegistryDefinition{{
+		AgentType: "REQUIREMENT", PromptKey: "requirement-review", DisplayName: "Requirement",
+		Instructions: "review safely", OutputSchema: json.RawMessage(`{"type":"object"}`),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := repository.ActivePromptVersion(ctx, "requirement-review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := repository.CreatePromptVersion(ctx, "requirement-review", "review more safely",
+		json.RawMessage(`{"type":"object"}`), "integration-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := repository.CreatePromptVersion(ctx, "requirement-review", "review more safely",
+		json.RawMessage(`{"type":"object"}`), "integration-test")
+	if err != nil || duplicate.ID != candidate.ID {
+		t.Fatalf("prompt candidate was not idempotent candidate=%#v duplicate=%#v err=%v", candidate, duplicate, err)
+	}
+	if err := repository.ActivatePromptVersion(ctx, "requirement-review", candidate.ID, "integration-reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	active, err := repository.ActivePromptVersion(ctx, "requirement-review")
+	if err != nil || active.ID != candidate.ID {
+		t.Fatalf("candidate was not activated active=%#v err=%v", active, err)
+	}
+	if err := repository.ActivatePromptVersion(ctx, "requirement-review", baseline.ID, "integration-reviewer"); err != nil {
+		t.Fatal(err)
+	}
 	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(time.Now().UnixNano(), 81, "V3 trace"))
 	if err != nil {
 		t.Fatal(err)
@@ -370,16 +400,20 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err := repository.FinishAgentRunWithTrace(ctx, runID, "COMPLETED", "", trace, nil); err != nil {
 		t.Fatal(err)
 	}
-	var gotManifest, responseID, finishReason string
+	var gotManifest, responseID, finishReason, profileVersionID, promptVersionID, modelVersionID string
 	var inputTokens, cachedTokens, outputTokens, reasoningTokens, latencyMS int64
 	if err := repository.db.QueryRowContext(ctx, `SELECT context_manifest_id,provider_response_id,input_tokens,
-		cached_tokens,output_tokens,reasoning_tokens,latency_ms,finish_reason FROM agent_runs WHERE id=$1`, runID).
-		Scan(&gotManifest, &responseID, &inputTokens, &cachedTokens, &outputTokens, &reasoningTokens, &latencyMS, &finishReason); err != nil {
+		cached_tokens,output_tokens,reasoning_tokens,latency_ms,finish_reason,agent_profile_version_id,prompt_version_id,model_version_id
+		FROM agent_runs WHERE id=$1`, runID).Scan(&gotManifest, &responseID, &inputTokens, &cachedTokens, &outputTokens,
+		&reasoningTokens, &latencyMS, &finishReason, &profileVersionID, &promptVersionID, &modelVersionID); err != nil {
 		t.Fatal(err)
 	}
 	if gotManifest != manifestID || responseID != "resp_test" || inputTokens != 120 || cachedTokens != 20 ||
 		outputTokens != 40 || reasoningTokens != 15 || latencyMS != 321 || finishReason != "completed" {
 		t.Fatalf("unexpected trace manifest=%s response=%s tokens=%d/%d/%d/%d latency=%d finish=%s",
 			gotManifest, responseID, inputTokens, cachedTokens, outputTokens, reasoningTokens, latencyMS, finishReason)
+	}
+	if profileVersionID == "" || promptVersionID == "" || modelVersionID == "" {
+		t.Fatalf("registry versions were not bound profile=%s prompt=%s model=%s", profileVersionID, promptVersionID, modelVersionID)
 	}
 }

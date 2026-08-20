@@ -64,10 +64,23 @@ func (s *Store) CreateContextManifest(ctx context.Context, workflowID, purpose, 
 
 func (s *Store) StartAgentRunWithContext(ctx context.Context, workflowID, workItemID, agentType, model, inputHash, contextManifestID string) (string, error) {
 	id, err := s.StartAgentRun(ctx, workflowID, workItemID, agentType, model, inputHash)
-	if err != nil || contextManifestID == "" {
+	if err != nil {
 		return id, err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET context_manifest_id=$1 WHERE id=$2`, contextManifestID, id); err != nil {
+	var manifest any
+	if contextManifestID != "" {
+		manifest = contextManifestID
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET context_manifest_id=$1 WHERE id=$2`, manifest, id); err != nil {
+		return "", err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET
+		agent_profile_version_id=(SELECT apv.id FROM agent_profile_versions apv JOIN agent_profiles ap ON ap.id=apv.agent_profile_id
+			WHERE ap.profile_key=LOWER($2) AND apv.status='ACTIVE' ORDER BY apv.version DESC LIMIT 1),
+		prompt_version_id=(SELECT apv.prompt_version_id FROM agent_profile_versions apv JOIN agent_profiles ap ON ap.id=apv.agent_profile_id
+			WHERE ap.profile_key=LOWER($2) AND apv.status='ACTIVE' ORDER BY apv.version DESC LIMIT 1),
+		model_version_id=(SELECT mv.id FROM model_versions mv WHERE mv.model_key=$3 AND mv.status='ACTIVE' ORDER BY mv.created_at DESC LIMIT 1)
+		WHERE id=$1`, id, agentType, model); err != nil {
 		return "", err
 	}
 	return id, nil

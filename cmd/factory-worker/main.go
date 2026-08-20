@@ -31,6 +31,21 @@ func main() {
 		os.Exit(1)
 	}
 	defer repository.Close()
+	if cfg.V3.Registry {
+		definitions := agents.BuiltinDefinitions()
+		seeds := make([]store.RegistryDefinition, 0, len(definitions))
+		for _, definition := range definitions {
+			seeds = append(seeds, store.RegistryDefinition{
+				AgentType: definition.AgentType, PromptKey: definition.PromptKey,
+				DisplayName: definition.DisplayName, Instructions: definition.Instructions,
+				OutputSchema: definition.OutputSchema,
+			})
+		}
+		if err := repository.BootstrapRegistry(context.Background(), cfg.OpenAIModel, seeds); err != nil {
+			logger.Error("V3 registry bootstrap failed", "error", err)
+			os.Exit(1)
+		}
+	}
 	runner := engine.New(
 		repository,
 		gitlab.New(cfg.GitLabAPIURL, cfg.GitLabToken),
