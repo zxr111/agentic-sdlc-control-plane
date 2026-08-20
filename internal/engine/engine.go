@@ -110,111 +110,6 @@ type DeliveryRequestPayload struct {
 	Environment string `json:"environment,omitempty"`
 }
 
-type GeneratePlansEvent struct {
-	WorkflowID string `json:"workflow_id"`
-	GateID     string `json:"gate_id"`
-}
-
-type AnalyzeRequirementEvent struct {
-	WorkflowID string `json:"workflow_id"`
-	Feedback   string `json:"feedback,omitempty"`
-}
-
-type GenerateArchitectureEvent struct {
-	WorkflowID string `json:"workflow_id"`
-	Feedback   string `json:"feedback,omitempty"`
-}
-
-type EvaluationRunEvent struct {
-	SuiteID         string `json:"suite_id"`
-	PromptVersionID string `json:"prompt_version_id"`
-}
-
-func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error {
-	switch event.Type {
-	case "gitlab.issue.changed":
-		var payload webhook.IssueChanged
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return e.handleIssueChanged(ctx, payload)
-	case "gitlab.gate.command":
-		var payload webhook.GateNote
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return e.handleGateCommand(ctx, payload)
-	case "gitlab.control.command":
-		var payload webhook.ControlNote
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return e.handleControlCommand(ctx, payload)
-	case "gitlab.lifecycle":
-		var payload webhook.LifecycleEvent
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return e.handleLifecycleEvent(ctx, payload)
-	case "workflow.generate_plans":
-		var payload GeneratePlansEvent
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return e.generatePlans(ctx, payload)
-	case "workflow.analyze_requirement":
-		var payload AnalyzeRequirementEvent
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		workflow, err := e.store.GetWorkflow(ctx, payload.WorkflowID)
-		if err != nil {
-			return err
-		}
-		snapshots, err := e.store.LatestSnapshots(ctx, workflow.ID)
-		if err != nil {
-			return err
-		}
-		project, ok := e.projects[workflow.GitLabProjectID]
-		if !ok {
-			return fmt.Errorf("project %d is not configured", workflow.GitLabProjectID)
-		}
-		return e.publishRequirementGate(ctx, workflow, project, snapshots, payload.Feedback)
-	case "workflow.generate_architecture":
-		var payload GenerateArchitectureEvent
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return e.generateArchitecture(ctx, payload)
-	case "evaluation.run":
-		if !e.v3.Evaluation {
-			return errors.New("V3 evaluation is disabled")
-		}
-		var payload EvaluationRunEvent
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		_, err := e.RunPromptEvaluation(ctx, payload.SuiteID, payload.PromptVersionID)
-		return err
-	case "external.delivery":
-		var payload webhook.ExternalCallback
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return e.handleDeliveryCallback(ctx, payload)
-	case "external.incident":
-		var payload webhook.ExternalCallback
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return err
-		}
-		return e.handleIncidentCallback(ctx, payload)
-	case "system.reconcile":
-		return e.reconcile(ctx)
-	default:
-		return fmt.Errorf("unsupported event type %q", event.Type)
-	}
-}
-
 func (e *Engine) DeliverOutbox(ctx context.Context, message domain.OutboxMessage) (string, error) {
 	switch message.Type {
 	case MessageUpsertNote:
@@ -544,6 +439,30 @@ func storeTrace(trace agents.Trace) store.AgentRunTrace {
 	}
 }
 
+// cancellableAgentContext turns the durable cancellation flag into context
+// cancellation. Provider clients already honor context cancellation, so a
+// cancelled Run cannot continue an expensive model request in the background.
+func (e *Engine) cancellableAgentContext(parent context.Context, runID string) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				requested, err := e.store.AgentRunCancellationRequested(ctx, runID)
+				if err == nil && requested {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel
+}
+
 type governedReviewObserver struct {
 	mu        sync.Mutex
 	engine    *Engine
@@ -633,7 +552,9 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 	if err != nil {
 		return err
 	}
-	review, trace, err := e.agents.ReviewRequirement(ctx, workflow.ID, agentContext, feedback)
+	runCtx, cancelRun := e.cancellableAgentContext(ctx, runID)
+	defer cancelRun()
+	review, trace, err := e.agents.ReviewRequirement(runCtx, workflow.ID, agentContext, feedback)
 	if err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
@@ -1114,14 +1035,18 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 	var prdTrace, testTrace agents.Trace
 	var prdErr, testErr error
 	var wait sync.WaitGroup
+	prdCtx, cancelPRD := e.cancellableAgentContext(ctx, prdRunID)
+	defer cancelPRD()
+	testCtx, cancelTest := e.cancellableAgentContext(ctx, testRunID)
+	defer cancelTest()
 	wait.Add(2)
 	go func() {
 		defer wait.Done()
-		prd, prdTrace, prdErr = e.agents.GeneratePRD(ctx, workflow.ID, source, string(reviewJSON), prdFeedback)
+		prd, prdTrace, prdErr = e.agents.GeneratePRD(prdCtx, workflow.ID, source, string(reviewJSON), prdFeedback)
 	}()
 	go func() {
 		defer wait.Done()
-		tests, testTrace, testErr = e.agents.GenerateTestPlan(ctx, workflow.ID, testSource, string(reviewJSON), testFeedback)
+		tests, testTrace, testErr = e.agents.GenerateTestPlan(testCtx, workflow.ID, testSource, string(reviewJSON), testFeedback)
 	}()
 	wait.Wait()
 	if prdErr != nil {
@@ -1210,7 +1135,9 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 	if err != nil {
 		return err
 	}
-	value, trace, err := e.agents.GenerateArchitecture(ctx, workflow.ID, agentContext,
+	runCtx, cancelRun := e.cancellableAgentContext(ctx, runID)
+	defer cancelRun()
+	value, trace, err := e.agents.GenerateArchitecture(runCtx, workflow.ID, agentContext,
 		string(requirement.Content), string(prd.Content), string(testPlan.Content), event.Feedback)
 	if err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
