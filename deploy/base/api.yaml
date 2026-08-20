@@ -26,11 +26,18 @@ spec:
           image: ai-sdlc-factory:latest
           imagePullPolicy: Always
           command: ["/usr/local/bin/factory-api"]
+          env:
+            - name: COMPONENT_MODE
+              value: api
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: DATABASE_URL}}
+            - name: GITLAB_WEBHOOK_SECRET
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: GITLAB_WEBHOOK_SECRET}}
+            - name: CALLBACK_SHARED_SECRET
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: CALLBACK_SHARED_SECRET}}
           envFrom:
             - configMapRef:
                 name: ai-sdlc-factory-config
-            - secretRef:
-                name: ai-sdlc-factory-secrets
           ports:
             - name: http
               containerPort: 8080

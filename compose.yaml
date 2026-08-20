@@ -67,6 +67,9 @@ services:
   api:
     <<: *factory-service
     command: ["/usr/local/bin/factory-api"]
+    environment:
+      <<: *factory-environment
+      COMPONENT_MODE: api
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -83,6 +86,7 @@ services:
     command: ["/usr/local/bin/factory-worker"]
     environment:
       <<: *factory-environment
+      COMPONENT_MODE: worker
       WORKER_ID: compose-worker
       WORKER_EVENT_TYPES: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile
     depends_on:
@@ -94,6 +98,7 @@ services:
     command: ["/usr/local/bin/factory-worker"]
     environment:
       <<: *factory-environment
+      COMPONENT_MODE: agent-runtime
       WORKER_ID: compose-agent-runtime
       WORKER_EVENT_TYPES: workflow.analyze_requirement,workflow.generate_plans,workflow.generate_architecture
       WORKER_OUTBOX_ENABLED: "false"
@@ -106,6 +111,7 @@ services:
     command: ["/usr/local/bin/factory-worker"]
     environment:
       <<: *factory-environment
+      COMPONENT_MODE: evaluation-worker
       WORKER_ID: compose-evaluation-worker
       WORKER_EVENT_TYPES: evaluation.run
       WORKER_OUTBOX_ENABLED: "false"

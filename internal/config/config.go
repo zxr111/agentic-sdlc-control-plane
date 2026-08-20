@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	ComponentMode         string
 	HTTPAddr              string
 	DatabaseURL           string
 	GitLabAPIURL          string
@@ -64,6 +65,7 @@ type V3Features struct {
 
 func Load() (Config, error) {
 	cfg := Config{
+		ComponentMode:         strings.ToLower(env("COMPONENT_MODE", "legacy")),
 		HTTPAddr:              env("HTTP_ADDR", ":8080"),
 		DatabaseURL:           os.Getenv("DATABASE_URL"),
 		GitLabAPIURL:          strings.TrimRight(env("GITLAB_API_URL", "https://git.kuainiujinke.com/api/v4"), "/"),
@@ -117,14 +119,26 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
-	required := map[string]string{
-		"DATABASE_URL":           c.DatabaseURL,
-		"GITLAB_API_TOKEN":       c.GitLabToken,
-		"GITLAB_WEBHOOK_SECRET":  c.GitLabWebhookSecret,
-		"CALLBACK_SHARED_SECRET": c.CallbackSharedSecret,
-		"CONFLUENCE_EMAIL":       c.ConfluenceEmail,
-		"CONFLUENCE_API_TOKEN":   c.ConfluenceToken,
-		"OPENAI_API_KEY":         c.OpenAIAPIKey,
+	required := map[string]string{"DATABASE_URL": c.DatabaseURL}
+	switch c.ComponentMode {
+	case "api":
+		required["GITLAB_WEBHOOK_SECRET"] = c.GitLabWebhookSecret
+		required["CALLBACK_SHARED_SECRET"] = c.CallbackSharedSecret
+	case "worker":
+		required["GITLAB_API_TOKEN"] = c.GitLabToken
+		required["CONFLUENCE_EMAIL"] = c.ConfluenceEmail
+		required["CONFLUENCE_API_TOKEN"] = c.ConfluenceToken
+	case "agent-runtime", "evaluation-worker":
+		required["OPENAI_API_KEY"] = c.OpenAIAPIKey
+	case "legacy":
+		required["GITLAB_API_TOKEN"] = c.GitLabToken
+		required["GITLAB_WEBHOOK_SECRET"] = c.GitLabWebhookSecret
+		required["CALLBACK_SHARED_SECRET"] = c.CallbackSharedSecret
+		required["CONFLUENCE_EMAIL"] = c.ConfluenceEmail
+		required["CONFLUENCE_API_TOKEN"] = c.ConfluenceToken
+		required["OPENAI_API_KEY"] = c.OpenAIAPIKey
+	default:
+		return fmt.Errorf("unsupported COMPONENT_MODE %q", c.ComponentMode)
 	}
 	var missing []string
 	for name, value := range required {

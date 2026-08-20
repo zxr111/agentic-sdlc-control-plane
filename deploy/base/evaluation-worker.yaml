@@ -27,6 +27,12 @@ spec:
           imagePullPolicy: Always
           command: ["/usr/local/bin/factory-worker"]
           env:
+            - name: COMPONENT_MODE
+              value: evaluation-worker
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: EVALUATION_DATABASE_URL}}
+            - name: OPENAI_API_KEY
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: OPENAI_API_KEY}}
             - name: WORKER_ID
               valueFrom:
                 fieldRef:
@@ -38,8 +44,6 @@ spec:
           envFrom:
             - configMapRef:
                 name: ai-sdlc-factory-config
-            - secretRef:
-                name: ai-sdlc-factory-secrets
           resources:
             requests:
               cpu: 100m
