@@ -399,7 +399,8 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	trace := AgentRunTrace{ProviderResponseID: "resp_test", InputTokens: 120, CachedTokens: 20,
-		OutputTokens: 40, ReasoningTokens: 15, LatencyMS: 321, FinishReason: "completed"}
+		OutputTokens: 40, ReasoningTokens: 15, EstimatedCost: 99, LatencyMS: 321, FinishReason: "completed",
+		SelectedModelKey: "test-model", Fallback: true, RouteReason: "controlled fallback", RiskLevel: "HIGH"}
 	if err := repository.FinishAgentRunWithTrace(ctx, runID, "COMPLETED", "", trace, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -418,6 +419,14 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	}
 	if profileVersionID == "" || promptVersionID == "" || modelVersionID == "" {
 		t.Fatalf("registry versions were not bound profile=%s prompt=%s model=%s", profileVersionID, promptVersionID, modelVersionID)
+	}
+	var routeCount int
+	if err := repository.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_route_decisions WHERE agent_run_id=$1
+		AND fallback=true AND estimated_cost_microunits=99`, runID).Scan(&routeCount); err != nil {
+		t.Fatal(err)
+	}
+	if routeCount != 1 {
+		t.Fatalf("route decision evidence missing: %d", routeCount)
 	}
 	if err := repository.BootstrapGovernance(ctx, []ToolSeed{
 		{Key: "knowledge.search", DisplayName: "Search", RiskLevel: "L1", AdapterType: "internal",

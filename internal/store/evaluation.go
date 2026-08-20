@@ -19,6 +19,36 @@ type EvaluationCaseInput struct {
 	DataSplit      string
 }
 
+type EvaluationCaseRecord struct {
+	ID           string
+	Key          string
+	Input        json.RawMessage
+	Expectations evaluation.Expectations
+	DataSplit    string
+}
+
+func (s *Store) EvaluationCases(ctx context.Context, suiteID string) ([]EvaluationCaseRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,case_key,input_json,expected_json,data_split FROM evaluation_cases WHERE suite_id=$1 ORDER BY case_key`, suiteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []EvaluationCaseRecord
+	for rows.Next() {
+		var record EvaluationCaseRecord
+		var input, expected []byte
+		if err := rows.Scan(&record.ID, &record.Key, &input, &expected, &record.DataSplit); err != nil {
+			return nil, err
+		}
+		record.Input = json.RawMessage(input)
+		if err := json.Unmarshal(expected, &record.Expectations); err != nil {
+			return nil, err
+		}
+		result = append(result, record)
+	}
+	return result, rows.Err()
+}
+
 type EvaluationRunInput struct {
 	SuiteID               string
 	PromptVersionID       string
@@ -147,6 +177,24 @@ type EvaluationComparison struct {
 	Decision  string             `json:"decision"`
 	Baseline  map[string]float64 `json:"baseline"`
 	Candidate map[string]float64 `json:"candidate"`
+}
+
+type EvaluationRunSummary struct {
+	ID, Status      string
+	Shadow          bool
+	Outputs, Scores int
+}
+
+func (s *Store) EvaluationRunSummary(ctx context.Context, runID string) (EvaluationRunSummary, error) {
+	var result EvaluationRunSummary
+	err := s.db.QueryRowContext(ctx, `SELECT er.id,er.status,er.shadow,COUNT(DISTINCT eo.id),COUNT(es.id)
+		FROM evaluation_runs er LEFT JOIN evaluation_outputs eo ON eo.evaluation_run_id=er.id
+		LEFT JOIN evaluation_scores es ON es.evaluation_output_id=eo.id WHERE er.id=$1
+		GROUP BY er.id,er.status,er.shadow`, runID).Scan(&result.ID, &result.Status, &result.Shadow, &result.Outputs, &result.Scores)
+	if err == sql.ErrNoRows {
+		return EvaluationRunSummary{}, ErrNotFound
+	}
+	return result, err
 }
 
 func (s *Store) CompareEvaluationRuns(ctx context.Context, baselineRunID, candidateRunID string) (EvaluationComparison, error) {

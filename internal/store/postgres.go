@@ -1245,6 +1245,10 @@ type AgentRunTrace struct {
 	EstimatedCost      int64
 	LatencyMS          int64
 	FinishReason       string
+	SelectedModelKey   string
+	Fallback           bool
+	RouteReason        string
+	RiskLevel          string
 }
 
 func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifactID string, trace AgentRunTrace, runError error) error {
@@ -1259,8 +1263,21 @@ func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifac
 	_, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET status=$1,output_artifact_id=$2,
 		error_summary=$3,provider_response_id=$4,input_tokens=$5,cached_tokens=$6,output_tokens=$7,
 		reasoning_tokens=$8,estimated_cost_microunits=$9,latency_ms=$10,finish_reason=$11,
-		finished_at=CURRENT_TIMESTAMP WHERE id=$12`,
+		model_version_id=COALESCE((SELECT id FROM model_versions WHERE model_key=$12 AND status='ACTIVE' ORDER BY created_at DESC LIMIT 1),model_version_id),
+		finished_at=CURRENT_TIMESTAMP WHERE id=$13`,
 		status, artifact, errorSummary, trace.ProviderResponseID, trace.InputTokens, trace.CachedTokens,
-		trace.OutputTokens, trace.ReasoningTokens, trace.EstimatedCost, trace.LatencyMS, trace.FinishReason, id)
+		trace.OutputTokens, trace.ReasoningTokens, trace.EstimatedCost, trace.LatencyMS, trace.FinishReason, trace.SelectedModelKey, id)
+	if err != nil {
+		return err
+	}
+	if trace.SelectedModelKey != "" {
+		_, err = s.db.ExecContext(ctx, `INSERT INTO model_route_decisions
+			(id,workflow_id,agent_run_id,requested_model_version_id,selected_model_version_id,risk_level,fallback,estimated_cost_microunits,reason)
+			SELECT $1,ar.workflow_id,ar.id,requested.id,selected.id,$2,$3,$4,$5 FROM agent_runs ar
+			JOIN model_versions selected ON selected.model_key=$6 AND selected.status='ACTIVE'
+			LEFT JOIN model_versions requested ON requested.model_key=ar.model AND requested.status='ACTIVE'
+			WHERE ar.id=$7 ORDER BY selected.created_at DESC LIMIT 1`, uuid.NewString(), trace.RiskLevel, trace.Fallback,
+			trace.EstimatedCost, trace.RouteReason, trace.SelectedModelKey, id)
+	}
 	return err
 }

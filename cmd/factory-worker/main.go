@@ -16,6 +16,7 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/delivery"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/engine"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/routing"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/tooling"
 )
@@ -43,9 +44,11 @@ func main() {
 				OutputSchema: definition.OutputSchema,
 			})
 		}
-		if err := repository.BootstrapRegistry(context.Background(), cfg.OpenAIModel, seeds); err != nil {
-			logger.Error("V3 registry bootstrap failed", "error", err)
-			os.Exit(1)
+		for _, model := range cfg.ModelCatalog {
+			if err := repository.BootstrapRegistry(context.Background(), model.Key, seeds); err != nil {
+				logger.Error("V3 registry bootstrap failed", "model", model.Key, "error", err)
+				os.Exit(1)
+			}
 		}
 		toolSeeds := make([]store.ToolSeed, 0, len(tooling.BuiltinTools()))
 		for _, tool := range tooling.BuiltinTools() {
@@ -65,11 +68,20 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	agentClient := agents.New(cfg.OpenAIAPIURL, cfg.OpenAIAPIKey, cfg.OpenAIModel)
+	if cfg.V3.ModelRouter {
+		models := make([]routing.Model, 0, len(cfg.ModelCatalog))
+		for _, model := range cfg.ModelCatalog {
+			models = append(models, routing.Model{ID: model.Key, Key: model.Key, Healthy: model.Healthy,
+				Active: model.Active, Quality: model.Quality, InputCost: model.InputCost, OutputCost: model.OutputCost, Capabilities: model.Capabilities})
+		}
+		agentClient.ConfigureRouting(models, cfg.ModelFallbackEnabled, cfg.ModelBudgetMicrounits)
+	}
 	runner := engine.New(
 		repository,
 		gitlab.New(cfg.GitLabAPIURL, cfg.GitLabToken),
 		confluence.New(cfg.ConfluenceBaseURL, cfg.ConfluenceEmail, cfg.ConfluenceToken),
-		agents.New(cfg.OpenAIAPIURL, cfg.OpenAIAPIKey, cfg.OpenAIModel),
+		agentClient,
 		cfg.Projects,
 		logger,
 	)

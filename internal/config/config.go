@@ -13,27 +13,40 @@ import (
 )
 
 type Config struct {
-	HTTPAddr             string
-	DatabaseURL          string
-	GitLabAPIURL         string
-	GitLabToken          string
-	GitLabWebhookSecret  string
-	CallbackSharedSecret string
-	ConfluenceBaseURL    string
-	ConfluenceEmail      string
-	ConfluenceToken      string
-	OpenAIAPIURL         string
-	OpenAIAPIKey         string
-	OpenAIModel          string
-	DeliveryTriggerURL   string
-	DeliveryTriggerToken string
-	WorkerID             string
-	WorkerPollInterval   time.Duration
-	LeaseDuration        time.Duration
-	ReconcileInterval    time.Duration
-	MaxAttempts          int
-	V3                   V3Features
-	Projects             map[int64]domain.ProjectConfig
+	HTTPAddr              string
+	DatabaseURL           string
+	GitLabAPIURL          string
+	GitLabToken           string
+	GitLabWebhookSecret   string
+	CallbackSharedSecret  string
+	ConfluenceBaseURL     string
+	ConfluenceEmail       string
+	ConfluenceToken       string
+	OpenAIAPIURL          string
+	OpenAIAPIKey          string
+	OpenAIModel           string
+	ModelCatalog          []ModelCatalogEntry
+	ModelFallbackEnabled  bool
+	ModelBudgetMicrounits int64
+	DeliveryTriggerURL    string
+	DeliveryTriggerToken  string
+	WorkerID              string
+	WorkerPollInterval    time.Duration
+	LeaseDuration         time.Duration
+	ReconcileInterval     time.Duration
+	MaxAttempts           int
+	V3                    V3Features
+	Projects              map[int64]domain.ProjectConfig
+}
+
+type ModelCatalogEntry struct {
+	Key          string          `json:"key"`
+	Healthy      bool            `json:"healthy"`
+	Active       bool            `json:"active"`
+	Quality      int             `json:"quality"`
+	InputCost    int64           `json:"input_cost_microunits_per_million"`
+	OutputCost   int64           `json:"output_cost_microunits_per_million"`
+	Capabilities map[string]bool `json:"capabilities"`
 }
 
 type V3Features struct {
@@ -49,25 +62,27 @@ type V3Features struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:             env("HTTP_ADDR", ":8080"),
-		DatabaseURL:          os.Getenv("DATABASE_URL"),
-		GitLabAPIURL:         strings.TrimRight(env("GITLAB_API_URL", "https://git.kuainiujinke.com/api/v4"), "/"),
-		GitLabToken:          os.Getenv("GITLAB_API_TOKEN"),
-		ConfluenceBaseURL:    strings.TrimRight(env("CONFLUENCE_BASE_URL", "https://kylith.atlassian.net"), "/"),
-		ConfluenceEmail:      os.Getenv("CONFLUENCE_EMAIL"),
-		ConfluenceToken:      os.Getenv("CONFLUENCE_API_TOKEN"),
-		OpenAIAPIURL:         strings.TrimRight(env("OPENAI_API_URL", "https://api.openai.com/v1"), "/"),
-		OpenAIAPIKey:         os.Getenv("OPENAI_API_KEY"),
-		OpenAIModel:          env("OPENAI_MODEL", "gpt-5.6-terra"),
-		DeliveryTriggerURL:   strings.TrimSpace(os.Getenv("DELIVERY_TRIGGER_URL")),
-		DeliveryTriggerToken: strings.TrimSpace(os.Getenv("DELIVERY_TRIGGER_TOKEN")),
-		GitLabWebhookSecret:  os.Getenv("GITLAB_WEBHOOK_SECRET"),
-		CallbackSharedSecret: os.Getenv("CALLBACK_SHARED_SECRET"),
-		WorkerID:             env("WORKER_ID", hostname()),
-		WorkerPollInterval:   durationEnv("WORKER_POLL_INTERVAL", time.Second),
-		LeaseDuration:        durationEnv("WORKER_LEASE_DURATION", 2*time.Minute),
-		ReconcileInterval:    durationEnv("RECONCILE_INTERVAL", 10*time.Minute),
-		MaxAttempts:          intEnv("MAX_ATTEMPTS", 8),
+		HTTPAddr:              env("HTTP_ADDR", ":8080"),
+		DatabaseURL:           os.Getenv("DATABASE_URL"),
+		GitLabAPIURL:          strings.TrimRight(env("GITLAB_API_URL", "https://git.kuainiujinke.com/api/v4"), "/"),
+		GitLabToken:           os.Getenv("GITLAB_API_TOKEN"),
+		ConfluenceBaseURL:     strings.TrimRight(env("CONFLUENCE_BASE_URL", "https://kylith.atlassian.net"), "/"),
+		ConfluenceEmail:       os.Getenv("CONFLUENCE_EMAIL"),
+		ConfluenceToken:       os.Getenv("CONFLUENCE_API_TOKEN"),
+		OpenAIAPIURL:          strings.TrimRight(env("OPENAI_API_URL", "https://api.openai.com/v1"), "/"),
+		OpenAIAPIKey:          os.Getenv("OPENAI_API_KEY"),
+		OpenAIModel:           env("OPENAI_MODEL", "gpt-5.6-terra"),
+		ModelFallbackEnabled:  boolEnv("V3_MODEL_FALLBACK_ENABLED", false),
+		ModelBudgetMicrounits: int64Env("V3_MODEL_BUDGET_MICROUNITS", 0),
+		DeliveryTriggerURL:    strings.TrimSpace(os.Getenv("DELIVERY_TRIGGER_URL")),
+		DeliveryTriggerToken:  strings.TrimSpace(os.Getenv("DELIVERY_TRIGGER_TOKEN")),
+		GitLabWebhookSecret:   os.Getenv("GITLAB_WEBHOOK_SECRET"),
+		CallbackSharedSecret:  os.Getenv("CALLBACK_SHARED_SECRET"),
+		WorkerID:              env("WORKER_ID", hostname()),
+		WorkerPollInterval:    durationEnv("WORKER_POLL_INTERVAL", time.Second),
+		LeaseDuration:         durationEnv("WORKER_LEASE_DURATION", 2*time.Minute),
+		ReconcileInterval:     durationEnv("RECONCILE_INTERVAL", 10*time.Minute),
+		MaxAttempts:           intEnv("MAX_ATTEMPTS", 8),
 		V3: V3Features{
 			Registry:        boolEnv("V3_REGISTRY_ENABLED", false),
 			ContextManifest: boolEnv("V3_CONTEXT_MANIFEST_ENABLED", false),
@@ -78,6 +93,15 @@ func Load() (Config, error) {
 			ToolGateway:     boolEnv("V3_TOOL_GATEWAY_ENABLED", false),
 			ModelRouter:     boolEnv("V3_MODEL_ROUTER_ENABLED", false),
 		},
+	}
+	if raw := strings.TrimSpace(os.Getenv("V3_MODEL_CATALOG_JSON")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &cfg.ModelCatalog); err != nil {
+			return Config{}, fmt.Errorf("parse V3_MODEL_CATALOG_JSON: %w", err)
+		}
+	}
+	if len(cfg.ModelCatalog) == 0 {
+		cfg.ModelCatalog = []ModelCatalogEntry{{Key: cfg.OpenAIModel, Healthy: true, Active: true, Quality: 100,
+			Capabilities: map[string]bool{"structured_output": true, "reasoning": true, "tool_calling": true}}}
 	}
 
 	projects, err := loadProjects()
@@ -112,6 +136,25 @@ func (c Config) Validate() error {
 	}
 	if (c.DeliveryTriggerURL == "") != (c.DeliveryTriggerToken == "") {
 		return errors.New("DELIVERY_TRIGGER_URL and DELIVERY_TRIGGER_TOKEN must be configured together")
+	}
+	if c.V3.ModelRouter {
+		seen := map[string]bool{}
+		preferred := false
+		for _, model := range c.ModelCatalog {
+			if strings.TrimSpace(model.Key) == "" {
+				return errors.New("V3 model catalog contains an empty key")
+			}
+			if seen[model.Key] {
+				return fmt.Errorf("duplicate V3 model key %s", model.Key)
+			}
+			seen[model.Key] = true
+			if model.Key == c.OpenAIModel {
+				preferred = true
+			}
+		}
+		if !preferred {
+			return fmt.Errorf("OPENAI_MODEL %s is missing from V3 model catalog", c.OpenAIModel)
+		}
 	}
 	return nil
 }
@@ -178,6 +221,18 @@ func intEnv(name string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func int64Env(name string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return fallback
 	}

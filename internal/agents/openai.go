@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/routing"
 )
 
 type Client struct {
@@ -19,6 +21,13 @@ type Client struct {
 	apiKey  string
 	model   string
 	http    *http.Client
+	router  *RoutingConfig
+}
+
+type RoutingConfig struct {
+	Models           []routing.Model
+	AllowFallback    bool
+	BudgetMicrounits int64
 }
 
 // Trace describes the immutable provider evidence captured for one model call.
@@ -32,6 +41,12 @@ type Trace struct {
 	ReasoningTokens    int64
 	Latency            time.Duration
 	FinishReason       string
+	SelectedModelID    string
+	SelectedModelKey   string
+	Fallback           bool
+	EstimatedCost      int64
+	RouteReason        string
+	RiskLevel          string
 }
 
 func New(baseURL, apiKey, model string) *Client {
@@ -44,6 +59,11 @@ func New(baseURL, apiKey, model string) *Client {
 }
 
 func (c *Client) Model() string { return c.model }
+
+func (c *Client) ConfigureRouting(models []routing.Model, allowFallback bool, budgetMicrounits int64) {
+	copyOfModels := append([]routing.Model(nil), models...)
+	c.router = &RoutingConfig{Models: copyOfModels, AllowFallback: allowFallback, BudgetMicrounits: budgetMicrounits}
+}
 
 type RequirementReview struct {
 	Decision           string       `json:"decision"`
@@ -257,9 +277,32 @@ func (c *Client) GenerateArchitecture(ctx context.Context, workflowID, source, r
 func (c *Client) generate(ctx context.Context, workflowID, schemaName, instructions, input string, schema json.RawMessage, result any) (Trace, error) {
 	startedAt := time.Now()
 	trace := Trace{}
+	modelKey := c.model
+	if c.router != nil {
+		risk := schemaRisk(schemaName)
+		decision, err := routing.Route(c.router.Models, routing.Request{PreferredModelID: c.model, Risk: risk,
+			RequiredCapabilities: []string{"structured_output"}, EstimatedInputTokens: int64(len(strings.Fields(instructions + " " + input))),
+			EstimatedOutputTokens: 12000, BudgetMicrounits: c.router.BudgetMicrounits, AllowFallback: c.router.AllowFallback})
+		if err != nil {
+			trace.FinishReason = "policy_denied"
+			trace.RiskLevel = risk
+			return trace, fmt.Errorf("model routing denied: %w", err)
+		}
+		modelKey = decision.Model.Key
+		trace.SelectedModelID = decision.Model.ID
+		trace.SelectedModelKey = decision.Model.Key
+		trace.Fallback = decision.Fallback
+		trace.EstimatedCost = decision.EstimatedCost
+		trace.RouteReason = decision.Reason
+		trace.RiskLevel = risk
+	} else {
+		trace.SelectedModelID = c.model
+		trace.SelectedModelKey = c.model
+		trace.RouteReason = "V3 model router disabled"
+	}
 	safety := sha256.Sum256([]byte("ai-sdlc-factory:" + workflowID))
 	requestBody := map[string]any{
-		"model":             c.model,
+		"model":             modelKey,
 		"instructions":      instructions,
 		"input":             input,
 		"store":             false,
@@ -351,4 +394,21 @@ func (c *Client) generate(ctx context.Context, workflowID, schemaName, instructi
 		}
 	}
 	return trace, fmt.Errorf("openai response status %q did not contain output_text", envelope.Status)
+}
+
+func schemaRisk(schemaName string) string {
+	value := strings.ToLower(schemaName)
+	if strings.Contains(value, "requirement") || strings.Contains(value, "architecture") || strings.Contains(value, "opinion") || strings.Contains(value, "synthesis") {
+		return "HIGH"
+	}
+	return "MEDIUM"
+}
+
+// GenerateCandidate executes an isolated evaluation prompt. It returns raw
+// structured output and never performs tools or workflow mutations.
+func (c *Client) GenerateCandidate(ctx context.Context, evaluationRunID, prompt string, input json.RawMessage,
+	schema json.RawMessage) (json.RawMessage, Trace, error) {
+	var output json.RawMessage
+	trace, err := c.generate(ctx, evaluationRunID, "evaluation_candidate_v1", prompt, string(input), schema, &output)
+	return output, trace, err
 }

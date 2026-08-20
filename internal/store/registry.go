@@ -99,6 +99,28 @@ type PromptVersionRecord struct {
 	ContentHash string
 }
 
+type PromptRuntime struct {
+	PromptVersionRecord
+	Content      string
+	OutputSchema json.RawMessage
+}
+
+func (s *Store) PromptRuntime(ctx context.Context, versionID string) (PromptRuntime, error) {
+	var result PromptRuntime
+	var schema []byte
+	err := s.db.QueryRowContext(ctx, `SELECT pv.id,pd.prompt_key,pv.version,pv.status,pv.content_hash,pv.content,pv.output_schema
+		FROM prompt_versions pv JOIN prompt_definitions pd ON pd.id=pv.prompt_definition_id WHERE pv.id=$1`, versionID).
+		Scan(&result.ID, &result.PromptKey, &result.Version, &result.Status, &result.ContentHash, &result.Content, &schema)
+	if err == sql.ErrNoRows {
+		return PromptRuntime{}, ErrNotFound
+	}
+	if err != nil {
+		return PromptRuntime{}, err
+	}
+	result.OutputSchema = json.RawMessage(schema)
+	return result, nil
+}
+
 func (s *Store) CreatePromptVersion(ctx context.Context, promptKey, content string, schema json.RawMessage, actor string) (PromptVersionRecord, error) {
 	digest := sha256.Sum256(append(append([]byte(content), 0), []byte(schema)...))
 	contentHash := hex.EncodeToString(digest[:])

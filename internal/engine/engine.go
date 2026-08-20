@@ -120,6 +120,11 @@ type GenerateArchitectureEvent struct {
 	Feedback   string `json:"feedback,omitempty"`
 }
 
+type EvaluationRunEvent struct {
+	SuiteID         string `json:"suite_id"`
+	PromptVersionID string `json:"prompt_version_id"`
+}
+
 func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error {
 	switch event.Type {
 	case "gitlab.issue.changed":
@@ -158,6 +163,16 @@ func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error
 			return err
 		}
 		return e.generateArchitecture(ctx, payload)
+	case "evaluation.run":
+		if !e.v3.Evaluation {
+			return errors.New("V3 evaluation is disabled")
+		}
+		var payload EvaluationRunEvent
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		_, err := e.RunPromptEvaluation(ctx, payload.SuiteID, payload.PromptVersionID)
+		return err
 	case "external.delivery":
 		var payload webhook.ExternalCallback
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -423,6 +438,8 @@ func storeTrace(trace agents.Trace) store.AgentRunTrace {
 		InputTokens:        trace.InputTokens, CachedTokens: trace.CachedTokens,
 		OutputTokens: trace.OutputTokens, ReasoningTokens: trace.ReasoningTokens,
 		LatencyMS: trace.Latency.Milliseconds(), FinishReason: trace.FinishReason,
+		SelectedModelKey: trace.SelectedModelKey, Fallback: trace.Fallback, EstimatedCost: trace.EstimatedCost,
+		RouteReason: trace.RouteReason, RiskLevel: trace.RiskLevel,
 	}
 }
 
