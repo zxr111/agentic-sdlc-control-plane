@@ -25,25 +25,28 @@ spec:
         - name: agent-runtime
           image: ai-sdlc-factory:latest
           imagePullPolicy: Always
-          command: ["/usr/local/bin/factory-worker"]
+          command: ["/usr/local/bin/factory-agent-runtime"]
           env:
-            - name: COMPONENT_MODE
-              value: agent-runtime
-            - name: DATABASE_URL
-              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: AGENT_DATABASE_URL}}
+            - name: HTTP_ADDR
+              value: :8090
             - name: OPENAI_API_KEY
               valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: OPENAI_API_KEY}}
-            - name: WORKER_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-            - name: WORKER_EVENT_TYPES
-              value: workflow.analyze_requirement,workflow.generate_plans,workflow.generate_architecture
-            - name: WORKER_OUTBOX_ENABLED
-              value: "false"
+            - name: AGENT_RUNTIME_SHARED_SECRET
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: AGENT_RUNTIME_SHARED_SECRET}}
           envFrom:
             - configMapRef:
                 name: ai-sdlc-factory-config
+          ports:
+            - name: runtime-http
+              containerPort: 8090
+          readinessProbe:
+            httpGet: {path: /healthz, port: runtime-http}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: runtime-http}
+            initialDelaySeconds: 10
+            periodSeconds: 20
           resources:
             requests:
               cpu: 250m

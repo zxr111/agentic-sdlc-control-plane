@@ -3,8 +3,9 @@
 ## 前置条件
 
 - Kubernetes 数据库必须安装 PostgreSQL `vector` 扩展；本地 Compose 已使用 `pgvector/pgvector:pg16`。
-- `AGENT_DATABASE_URL` 与 `EVALUATION_DATABASE_URL` 必须使用独立数据库角色，不能复用迁移或主 Worker 账号。Agent 角色仅授予 Registry、Context、Agent Run、Artifact、Gate 与对应队列表的必要权限；Evaluation 角色仅授予评测、Registry 与只读历史证据权限。两者均不得拥有数据库角色创建、Schema 修改、外部凭据表或迁移权限。
-- API、Worker、Agent Runtime、Evaluation Worker 和 Knowledge Indexer 只通过逐项 `secretKeyRef` 获取自身凭据，禁止恢复为整包 `envFrom Secret`。
+- `AGENT_DATABASE_URL` 仅供 Agent Dispatcher 使用，`EVALUATION_DATABASE_URL` 仅供 Evaluation Worker 使用；二者必须使用独立角色，不能复用迁移或主 Worker 账号。Dispatcher 角色仅授予 Registry、Context、Agent Run、Artifact、Gate 与对应队列表的必要权限；Evaluation 角色仅授予评测、Registry 与只读历史证据权限。两者均不得拥有角色创建、Schema 修改、外部凭据表或迁移权限。Agent Runtime 不配置任何数据库 URL。
+- API、Worker、Agent Dispatcher、Agent Runtime、Evaluation Worker 和 Knowledge Indexer 只通过逐项 `secretKeyRef` 获取自身凭据，禁止恢复为整包 `envFrom Secret`。
+- `AGENT_RUNTIME_SHARED_SECRET` 必须独立随机生成并仅注入 Dispatcher、Evaluation Worker 和 Agent Runtime；不得与 Webhook、Callback 或 Provider Key 复用。
 - 使用不可变测试镜像标签，禁止使用生产凭据。
 - `ai-sdlc-factory-secrets` 由集群密钥系统创建，不提交明文 Secret。
 - GitLab 测试项目、Confluence 合成需求页和测试模型账号均无生产权限。
@@ -42,6 +43,9 @@ kubectl apply -k deploy/overlays/test
 kubectl -n ai-factory-test wait --for=condition=complete job/ai-sdlc-factory-migrate --timeout=180s
 kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-api
 kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-worker
+kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-agent-runtime
+kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-agent-dispatcher
+kubectl -n ai-factory-test rollout status deployment/ai-sdlc-factory-evaluation-worker
 ```
 
 Dashboard 不通过 Ingress 暴露。管理员临时查看时执行：

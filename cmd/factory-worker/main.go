@@ -69,7 +69,11 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	agentClient := agents.New(cfg.OpenAIAPIURL, cfg.OpenAIAPIKey, cfg.OpenAIModel)
+	modelURL, modelCredential := cfg.OpenAIAPIURL, cfg.OpenAIAPIKey
+	if cfg.AgentRuntimeURL != "" {
+		modelURL, modelCredential = cfg.AgentRuntimeURL, cfg.AgentRuntimeSecret
+	}
+	agentClient := agents.New(modelURL, modelCredential, cfg.OpenAIModel)
 	if cfg.V3.ModelRouter {
 		health, err := repository.LatestModelHealth(context.Background())
 		if err != nil {

@@ -26,6 +26,8 @@ type Config struct {
 	OpenAIAPIURL          string
 	OpenAIAPIKey          string
 	OpenAIModel           string
+	AgentRuntimeURL       string
+	AgentRuntimeSecret    string
 	ModelCatalog          []ModelCatalogEntry
 	ModelFallbackEnabled  bool
 	ModelBudgetMicrounits int64
@@ -76,6 +78,8 @@ func Load() (Config, error) {
 		OpenAIAPIURL:          strings.TrimRight(env("OPENAI_API_URL", "https://api.openai.com/v1"), "/"),
 		OpenAIAPIKey:          os.Getenv("OPENAI_API_KEY"),
 		OpenAIModel:           env("OPENAI_MODEL", "gpt-5.6-terra"),
+		AgentRuntimeURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("AGENT_RUNTIME_URL")), "/"),
+		AgentRuntimeSecret:    os.Getenv("AGENT_RUNTIME_SHARED_SECRET"),
 		ModelFallbackEnabled:  boolEnv("V3_MODEL_FALLBACK_ENABLED", false),
 		ModelBudgetMicrounits: int64Env("V3_MODEL_BUDGET_MICROUNITS", 0),
 		DeliveryTriggerURL:    strings.TrimSpace(os.Getenv("DELIVERY_TRIGGER_URL")),
@@ -128,8 +132,9 @@ func (c Config) Validate() error {
 		required["GITLAB_API_TOKEN"] = c.GitLabToken
 		required["CONFLUENCE_EMAIL"] = c.ConfluenceEmail
 		required["CONFLUENCE_API_TOKEN"] = c.ConfluenceToken
-	case "agent-runtime", "evaluation-worker":
-		required["OPENAI_API_KEY"] = c.OpenAIAPIKey
+	case "agent-dispatcher", "evaluation-worker":
+		required["AGENT_RUNTIME_URL"] = c.AgentRuntimeURL
+		required["AGENT_RUNTIME_SHARED_SECRET"] = c.AgentRuntimeSecret
 	case "legacy":
 		required["GITLAB_API_TOKEN"] = c.GitLabToken
 		required["GITLAB_WEBHOOK_SECRET"] = c.GitLabWebhookSecret

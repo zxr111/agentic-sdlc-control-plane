@@ -329,6 +329,7 @@ func (c *Client) generate(ctx context.Context, workflowID, schemaName, instructi
 		return trace, err
 	}
 	request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	request.Header.Set("Idempotency-Key", workflowID+":"+schemaName)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	response, err := c.http.Do(request)

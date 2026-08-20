@@ -554,7 +554,7 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 	}
 	runCtx, cancelRun := e.cancellableAgentContext(ctx, runID)
 	defer cancelRun()
-	review, trace, err := e.agents.ReviewRequirement(runCtx, workflow.ID, agentContext, feedback)
+	review, trace, err := e.agents.ReviewRequirement(runCtx, runID, agentContext, feedback)
 	if err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
@@ -1042,11 +1042,11 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 	wait.Add(2)
 	go func() {
 		defer wait.Done()
-		prd, prdTrace, prdErr = e.agents.GeneratePRD(prdCtx, workflow.ID, source, string(reviewJSON), prdFeedback)
+		prd, prdTrace, prdErr = e.agents.GeneratePRD(prdCtx, prdRunID, source, string(reviewJSON), prdFeedback)
 	}()
 	go func() {
 		defer wait.Done()
-		tests, testTrace, testErr = e.agents.GenerateTestPlan(testCtx, workflow.ID, testSource, string(reviewJSON), testFeedback)
+		tests, testTrace, testErr = e.agents.GenerateTestPlan(testCtx, testRunID, testSource, string(reviewJSON), testFeedback)
 	}()
 	wait.Wait()
 	if prdErr != nil {
@@ -1137,7 +1137,7 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 	}
 	runCtx, cancelRun := e.cancellableAgentContext(ctx, runID)
 	defer cancelRun()
-	value, trace, err := e.agents.GenerateArchitecture(runCtx, workflow.ID, agentContext,
+	value, trace, err := e.agents.GenerateArchitecture(runCtx, runID, agentContext,
 		string(requirement.Content), string(prd.Content), string(testPlan.Content), event.Feedback)
 	if err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)

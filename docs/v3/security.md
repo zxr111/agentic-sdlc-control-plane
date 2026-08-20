@@ -62,9 +62,8 @@ flowchart LR
 
 ## 网络与运行时
 
-- Agent Runtime 只允许访问已配置 Model Provider、MCP Gateway、PostgreSQL 和必要 DNS。
+- Agent Runtime 只允许接受 Agent Dispatcher 与 Evaluation Worker 的内部鉴权请求，并只允许访问已配置 Model Provider 和必要 DNS；它没有数据库网络权限。Dispatcher 与 Evaluation Worker 可访问各自的受限数据库角色和 Agent Runtime，但不能直接访问 Model Provider。
 - MCP Server 按风险和凭据作用域隔离部署。
 - 容器继续使用非 root、只读根文件系统、丢弃 Capability 和受限 ServiceAccount。
 - Provider 和 MCP 响应设置大小、时间和重定向限制。
 - Object Storage 中的证据使用项目级前缀和最小权限访问。
-

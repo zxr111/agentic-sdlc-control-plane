@@ -10,3 +10,16 @@ spec:
     - name: http
       port: 80
       targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-sdlc-factory-agent-runtime
+spec:
+  selector:
+    app.kubernetes.io/name: ai-sdlc-factory
+    app.kubernetes.io/component: agent-runtime
+  ports:
+    - name: runtime-http
+      port: 8090
+      targetPort: runtime-http

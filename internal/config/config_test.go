@@ -32,8 +32,9 @@ func TestComponentValidationUsesLeastPrivilegeCredentials(t *testing.T) {
 	}}
 	base := Config{DatabaseURL: "postgres://test", Projects: map[int64]domain.ProjectConfig{10: project}}
 	agent := base
-	agent.ComponentMode = "agent-runtime"
-	agent.OpenAIAPIKey = "model-key"
+	agent.ComponentMode = "agent-dispatcher"
+	agent.AgentRuntimeURL = "http://agent-runtime:8090"
+	agent.AgentRuntimeSecret = "runtime-secret"
 	if err := agent.Validate(); err != nil {
 		t.Fatalf("agent runtime required unrelated external credentials: %v", err)
 	}

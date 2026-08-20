@@ -20,6 +20,9 @@ func TestGenerateReturnsProviderTrace(t *testing.T) {
 		if request.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %s", request.URL.Path)
 		}
+		if request.Header.Get("Idempotency-Key") != "workflow:trace_test" {
+			t.Fatalf("idempotency key=%q", request.Header.Get("Idempotency-Key"))
+		}
 		body := `{
 			"id":"resp_test","status":"completed",
 			"usage":{"input_tokens":120,"output_tokens":40,

@@ -68,7 +68,7 @@ patches:
                   path: projects.json
   - target:
       kind: Deployment
-      name: ai-sdlc-factory-agent-runtime
+      name: ai-sdlc-factory-agent-dispatcher
     patch: |-
       - op: add
         path: /spec/template/spec/containers/0/env/-

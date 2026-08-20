@@ -1,7 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: ai-sdlc-factory
+  name: ai-sdlc-factory-api-worker
 spec:
   podSelector:
     matchLabels:
@@ -9,7 +9,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
-        values: [api, worker, agent-runtime, evaluation-worker]
+        values: [api, worker]
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
@@ -44,6 +44,71 @@ spec:
           port: 443
         - protocol: TCP
           port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-factory-agent-compute
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-sdlc-factory
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [agent-dispatcher, evaluation-worker]
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - ports:
+        - {protocol: TCP, port: 5432}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-sdlc-factory
+              app.kubernetes.io/component: agent-runtime
+      ports:
+        - {protocol: TCP, port: 8090}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-factory-agent-runtime
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-sdlc-factory
+      app.kubernetes.io/component: agent-runtime
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-sdlc-factory
+              app.kubernetes.io/component: agent-dispatcher
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-sdlc-factory
+              app.kubernetes.io/component: evaluation-worker
+      ports:
+        - {protocol: TCP, port: 8090}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - ports:
+        - {protocol: TCP, port: 443}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -1,60 +1,50 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ai-sdlc-factory-evaluation-worker
+  name: ai-sdlc-factory-agent-dispatcher
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: ai-sdlc-factory
-      app.kubernetes.io/component: evaluation-worker
+      app.kubernetes.io/component: agent-dispatcher
   template:
     metadata:
       labels:
         app.kubernetes.io/name: ai-sdlc-factory
-        app.kubernetes.io/component: evaluation-worker
+        app.kubernetes.io/component: agent-dispatcher
     spec:
       serviceAccountName: ai-sdlc-factory
-      imagePullSecrets:
-        - name: registry-credentials
+      imagePullSecrets: [{name: registry-credentials}]
       securityContext:
         runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
+        seccompProfile: {type: RuntimeDefault}
       containers:
-        - name: evaluation-worker
+        - name: agent-dispatcher
           image: ai-sdlc-factory:latest
           imagePullPolicy: Always
           command: ["/usr/local/bin/factory-worker"]
           env:
             - name: COMPONENT_MODE
-              value: evaluation-worker
+              value: agent-dispatcher
             - name: DATABASE_URL
-              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: EVALUATION_DATABASE_URL}}
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: AGENT_DATABASE_URL}}
             - name: AGENT_RUNTIME_URL
               value: http://ai-sdlc-factory-agent-runtime:8090
             - name: AGENT_RUNTIME_SHARED_SECRET
               valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: AGENT_RUNTIME_SHARED_SECRET}}
             - name: WORKER_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - name: WORKER_EVENT_TYPES
-              value: evaluation.run
+              value: workflow.analyze_requirement,workflow.generate_plans,workflow.generate_architecture
             - name: WORKER_OUTBOX_ENABLED
               value: "false"
           envFrom:
-            - configMapRef:
-                name: ai-sdlc-factory-config
+            - configMapRef: {name: ai-sdlc-factory-config}
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: "1"
-              memory: 512Mi
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            capabilities: {drop: ["ALL"]}

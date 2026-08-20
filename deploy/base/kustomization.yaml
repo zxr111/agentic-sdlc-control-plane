@@ -5,6 +5,7 @@ resources:
   - api.yaml
   - worker.yaml
   - agent-runtime.yaml
+  - agent-dispatcher.yaml
   - evaluation-worker.yaml
   - knowledge-indexer.yaml
   - service.yaml
