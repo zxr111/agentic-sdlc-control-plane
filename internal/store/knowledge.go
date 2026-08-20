@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strings"
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
@@ -60,32 +62,103 @@ func (s *Store) ValidateKnowledgeHits(ctx context.Context, hits []KnowledgeHit) 
 // RetrieveKnowledge performs a bounded project-scoped retrieval and records
 // every selected result so the exact RAG evidence can be replayed later.
 func (s *Store) RetrieveKnowledge(ctx context.Context, workflowID string, projectID int64, query string, minimumAuthority, limit int) ([]KnowledgeHit, error) {
-	runID := uuid.NewString()
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO retrieval_runs
-		(id,workflow_id,query_text,filters_json,strategy) VALUES ($1,$2,$3,$4,'LEXICAL_AUTHORITY_V1')`,
-		runID, workflowID, query, `{"project_scoped":true}`); err != nil {
-		return nil, err
+	if limit <= 0 || limit > 100 {
+		limit = 20
 	}
-	hits, err := s.SearchKnowledge(ctx, projectID, query, minimumAuthority, limit)
-	if err != nil {
-		return nil, err
+	queries := []string{strings.TrimSpace(query)}
+	if rewritten := knowledge.RewriteQuery(query); rewritten != "" && rewritten != strings.ToLower(strings.TrimSpace(query)) {
+		queries = append(queries, rewritten)
+	}
+	type retrievalRound struct {
+		id, query string
+		hits      []KnowledgeHit
+	}
+	rounds := make([]retrievalRound, 0, len(queries))
+	var parentID string
+	filters, _ := json.Marshal(map[string]any{"project_scoped": true, "minimum_authority": minimumAuthority})
+	for index, currentQuery := range queries {
+		runID := uuid.NewString()
+		var parent any
+		if parentID != "" {
+			parent = parentID
+		}
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO retrieval_runs
+			(id,workflow_id,query_text,filters_json,strategy,iteration,parent_run_id,rewritten_from)
+			VALUES ($1,$2,$3,$4,'HYBRID_RRF_AGENTIC_V1',$5,$6,$7)`, runID, workflowID, currentQuery,
+			string(filters), index+1, parent, query); err != nil {
+			return nil, err
+		}
+		hits, err := s.SearchKnowledge(ctx, projectID, currentQuery, minimumAuthority, limit*2)
+		if err != nil {
+			return nil, err
+		}
+		for hitIndex := range hits {
+			hits[hitIndex].RerankScore += float64(hits[hitIndex].AuthorityLevel) / 1000
+		}
+		rounds = append(rounds, retrievalRound{id: runID, query: currentQuery, hits: hits})
+		parentID = runID
+	}
+	best := map[string]KnowledgeHit{}
+	for _, round := range rounds {
+		for _, hit := range round.hits {
+			if existing, ok := best[hit.ChunkID]; !ok || hit.RerankScore > existing.RerankScore {
+				best[hit.ChunkID] = hit
+			}
+		}
+	}
+	hits := make([]KnowledgeHit, 0, len(best))
+	for _, hit := range best {
+		hits = append(hits, hit)
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].AuthorityLevel != hits[j].AuthorityLevel {
+			return hits[i].AuthorityLevel > hits[j].AuthorityLevel
+		}
+		return hits[i].RerankScore > hits[j].RerankScore
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	selected := map[string]bool{}
+	for _, hit := range hits {
+		selected[hit.ChunkID] = true
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	for index, hit := range hits {
-		hits[index].RerankScore = hit.LexicalScore + float64(hit.AuthorityLevel)/1000
-		if _, err := tx.ExecContext(ctx, `INSERT INTO retrieval_results
+	for _, round := range rounds {
+		for index, hit := range round.hits {
+			exclusion := "lower fused rank"
+			if selected[hit.ChunkID] {
+				exclusion = ""
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO retrieval_results
 			(id,retrieval_run_id,knowledge_chunk_id,rank,lexical_score,vector_score,rerank_score,selected)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE)`, uuid.NewString(), runID, hit.ChunkID, index+1,
-			hit.LexicalScore, hit.VectorScore, hits[index].RerankScore); err != nil {
-			return nil, err
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, uuid.NewString(), round.id, hit.ChunkID, index+1,
+				hit.LexicalScore, hit.VectorScore, hit.RerankScore, selected[hit.ChunkID]); err != nil {
+				return nil, err
+			}
+			if exclusion != "" {
+				if _, err := tx.ExecContext(ctx, `UPDATE retrieval_results SET exclusion_reason=$1
+					WHERE retrieval_run_id=$2 AND knowledge_chunk_id=$3`, exclusion, round.id, hit.ChunkID); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE retrieval_runs SET finished_at=CURRENT_TIMESTAMP WHERE id=$1`, runID); err != nil {
-		return nil, err
+	stopReason := "query_budget_exhausted"
+	if len(hits) >= limit {
+		stopReason = "sufficient_results"
+	} else if len(rounds) == 1 {
+		stopReason = "rewrite_not_applicable"
+	}
+	for _, round := range rounds {
+		if _, err := tx.ExecContext(ctx, `UPDATE retrieval_runs SET finished_at=CURRENT_TIMESTAMP,
+			selection_reason='authority then reciprocal-rank fusion',stop_reason=$1 WHERE id=$2`, stopReason, round.id); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -212,6 +285,9 @@ type ProjectMemory struct {
 func (s *Store) ProposeProjectMemory(ctx context.Context, memory ProjectMemory, evidence any) (string, error) {
 	if memory.SourceDocumentID == "" {
 		return "", errors.New("project memory requires a source document")
+	}
+	if err := knowledge.ValidateDocument(memory.Content); err != nil {
+		return "", err
 	}
 	if memory.ID == "" {
 		memory.ID = uuid.NewString()

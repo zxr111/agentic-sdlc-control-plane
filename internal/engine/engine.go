@@ -19,6 +19,7 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/delivery"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/multiagent"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/webhook"
@@ -334,26 +335,45 @@ func combinedHash(snapshots []domain.Snapshot) string {
 }
 
 func sourceText(snapshots []domain.Snapshot) string {
+	text, _ := boundedSourceText(snapshots, 0)
+	return text
+}
+
+func boundedSourceText(snapshots []domain.Snapshot, maxTokensPerSource int) (string, map[string]string) {
 	var out strings.Builder
+	transmitted := map[string]string{}
 	for _, snapshot := range snapshots {
-		fmt.Fprintf(&out, "\n--- Confluence Page %s v%d: %s ---\nURL: %s\nSHA-256: %s\n%s\n",
+		content, compressed := knowledge.CompressText(snapshot.NormalizedText, maxTokensPerSource)
+		method := "none"
+		if compressed {
+			method = "extractive-head-tail-v1"
+		}
+		transmitted[snapshot.ID] = content
+		fmt.Fprintf(&out, "\n--- Confluence Page %s v%d: %s ---\nURL: %s\nSource SHA-256: %s\nCompression: %s\n%s\n",
 			snapshot.ConfluencePageID, snapshot.Version, snapshot.Title, snapshot.URL,
-			snapshot.ContentHash, snapshot.NormalizedText)
+			snapshot.ContentHash, method, content)
 	}
-	return out.String()
+	return out.String(), transmitted
 }
 
 func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, agentType, inputHash string, snapshots []domain.Snapshot) (string, string, error) {
-	contextText := sourceText(snapshots)
+	contextText, transmittedSnapshots := boundedSourceText(snapshots, 8000)
 	manifestID := ""
 	if e.v3.ContextManifest {
 		entries := make([]store.ContextEntryInput, 0, len(snapshots))
 		for _, snapshot := range snapshots {
+			transmitted := transmittedSnapshots[snapshot.ID]
+			digest := sha256.Sum256([]byte(transmitted))
+			transmittedHash := hex.EncodeToString(digest[:])
+			compression := "none"
+			if transmitted != snapshot.NormalizedText {
+				compression = "extractive-head-tail-v1"
+			}
 			entries = append(entries, store.ContextEntryInput{
 				SourceType: "CONFLUENCE_SNAPSHOT", SourceID: snapshot.ID, AuthorityLevel: 100,
-				TokenCount: len(strings.Fields(snapshot.NormalizedText)), ContentHash: snapshot.ContentHash,
-				Required: true,
-				Citation: map[string]any{"url": snapshot.URL, "page_id": snapshot.ConfluencePageID, "version": snapshot.Version},
+				TokenCount: len(strings.Fields(transmitted)), ContentHash: transmittedHash, CompressionMethod: compression,
+				Required: true, Citation: map[string]any{"url": snapshot.URL, "page_id": snapshot.ConfluencePageID,
+					"version": snapshot.Version, "source_content_hash": snapshot.ContentHash},
 			})
 		}
 		if e.v3.RAG {

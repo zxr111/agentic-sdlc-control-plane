@@ -57,6 +57,10 @@ flowchart LR
 
 Agentic RAG 最多允许有限轮查询改写。每轮保存查询、结果、选择原因和停止原因。
 
+当前实现最多执行两轮：第一轮使用原始查询，第二轮仅删除原查询中的会话填充词、去重并截断，不允许生成来源中不存在的新术语。每轮通过 `parent_run_id`、`iteration`、`rewritten_from`、`selection_reason` 和 `stop_reason` 重放；未选 Chunk 记录排除原因。
+
+超过单来源 Context 上限时采用确定性的首尾抽取压缩。原始快照与 Hash 保持不变，Context Entry 保存实际传输内容 Hash、`extractive-head-tail-v1` 方法及原始来源 Hash，压缩结果不能覆盖权威原文。
+
 ## 项目记忆
 
 项目记忆是受治理的工程知识，不是自由形式聊天历史。类型包括：
@@ -83,4 +87,3 @@ CANDIDATE -> REVIEW_REQUIRED -> ACTIVE -> SUPERSEDED / EXPIRED / REVOKED
 - 搜索索引是可重建派生数据，可按来源撤销或重建。
 - Memory 撤销后不从审计中物理删除，但不能再进入新 Context。
 - 数据源权限变化后应触发索引权限更新和 Context 缓存失效。
-

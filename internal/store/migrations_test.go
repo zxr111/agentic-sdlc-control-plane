@@ -110,6 +110,19 @@ func TestV3RegistryChangeGovernanceMigration(t *testing.T) {
 	}
 }
 
+func TestV3AgenticRetrievalMigration(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/011_v3_agentic_retrieval.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, column := range []string{"iteration", "parent_run_id", "rewritten_from", "selection_reason", "stop_reason"} {
+		if !strings.Contains(source, "retrieval_runs ADD COLUMN IF NOT EXISTS "+column) {
+			t.Fatalf("agentic retrieval migration missing %s", column)
+		}
+	}
+}
+
 func TestRetryDelayIsBounded(t *testing.T) {
 	if got := retryDelay(100).Seconds(); got != 300 {
 		t.Fatalf("expected 300 seconds, got %v", got)

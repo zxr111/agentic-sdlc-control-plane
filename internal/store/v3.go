@@ -12,13 +12,14 @@ import (
 )
 
 type ContextEntryInput struct {
-	SourceType     string
-	SourceID       string
-	AuthorityLevel int
-	TokenCount     int
-	ContentHash    string
-	Citation       any
-	Required       bool
+	SourceType        string
+	SourceID          string
+	AuthorityLevel    int
+	TokenCount        int
+	ContentHash       string
+	Citation          any
+	Required          bool
+	CompressionMethod string
 }
 
 // CreateContextManifest persists the exact ordered source set supplied to an
@@ -28,7 +29,11 @@ func (s *Store) CreateContextManifest(ctx context.Context, workflowID, purpose, 
 	hash := sha256.New()
 	totalTokens := 0
 	for index, entry := range entries {
-		fmt.Fprintf(hash, "%d:%s:%s:%d:%s\n", index, entry.SourceType, entry.SourceID, entry.AuthorityLevel, entry.ContentHash)
+		compression := entry.CompressionMethod
+		if compression == "" {
+			compression = "none"
+		}
+		fmt.Fprintf(hash, "%d:%s:%s:%d:%s:%s\n", index, entry.SourceType, entry.SourceID, entry.AuthorityLevel, entry.ContentHash, compression)
 		totalTokens += entry.TokenCount
 	}
 	manifestID := uuid.NewString()
@@ -43,6 +48,9 @@ func (s *Store) CreateContextManifest(ctx context.Context, workflowID, purpose, 
 		return "", err
 	}
 	for index, entry := range entries {
+		if entry.CompressionMethod == "" {
+			entry.CompressionMethod = "none"
+		}
 		citation, err := json.Marshal(entry.Citation)
 		if err != nil {
 			return "", err
@@ -52,9 +60,9 @@ func (s *Store) CreateContextManifest(ctx context.Context, workflowID, purpose, 
 			sourceID = entry.SourceID
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO context_entries
-			(id,context_manifest_id,ordinal,source_type,source_id,authority_level,token_count,content_hash,citation_json,required)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, uuid.NewString(), manifestID, index, entry.SourceType,
-			sourceID, entry.AuthorityLevel, entry.TokenCount, entry.ContentHash, string(citation), entry.Required); err != nil {
+			(id,context_manifest_id,ordinal,source_type,source_id,authority_level,compression_method,token_count,content_hash,citation_json,required)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, uuid.NewString(), manifestID, index, entry.SourceType,
+			sourceID, entry.AuthorityLevel, entry.CompressionMethod, entry.TokenCount, entry.ContentHash, string(citation), entry.Required); err != nil {
 			return "", err
 		}
 	}

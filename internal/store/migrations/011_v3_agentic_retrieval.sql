@@ -1,0 +1,5 @@
+ALTER TABLE retrieval_runs ADD COLUMN IF NOT EXISTS iteration INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE retrieval_runs ADD COLUMN IF NOT EXISTS parent_run_id UUID REFERENCES retrieval_runs(id);
+ALTER TABLE retrieval_runs ADD COLUMN IF NOT EXISTS rewritten_from TEXT NOT NULL DEFAULT '';
+ALTER TABLE retrieval_runs ADD COLUMN IF NOT EXISTS selection_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE retrieval_runs ADD COLUMN IF NOT EXISTS stop_reason TEXT NOT NULL DEFAULT '';

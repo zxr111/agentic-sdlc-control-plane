@@ -552,8 +552,9 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		t.Fatalf("provider model id=%s", providerModelID)
 	}
 	var required bool
-	if err := repository.db.QueryRowContext(ctx, `SELECT required FROM context_entries WHERE context_manifest_id=$1`, manifestID).Scan(&required); err != nil || !required {
-		t.Fatalf("required context=%t err=%v", required, err)
+	var compression string
+	if err := repository.db.QueryRowContext(ctx, `SELECT required,compression_method FROM context_entries WHERE context_manifest_id=$1`, manifestID).Scan(&required, &compression); err != nil || !required || compression != "none" {
+		t.Fatalf("required context=%t compression=%s err=%v", required, compression, err)
 	}
 	var routeCount int
 	if err := repository.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_route_decisions WHERE agent_run_id=$1
@@ -734,6 +735,19 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	}
 	if selected != 1 {
 		t.Fatalf("selected retrieval evidence=%d", selected)
+	}
+	if _, err := repository.RetrieveKnowledge(ctx, workflow.ID, projectID,
+		"How do we preserve the payment retry idempotency key?", 50, 10); err != nil {
+		t.Fatal(err)
+	}
+	var retrievalRounds, maxIteration, parentRounds, stoppedRounds int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*),max(iteration),count(*) FILTER(WHERE parent_run_id IS NOT NULL),
+		count(*) FILTER(WHERE stop_reason<>'') FROM retrieval_runs WHERE workflow_id=$1 AND strategy='HYBRID_RRF_AGENTIC_V1'`, workflow.ID).
+		Scan(&retrievalRounds, &maxIteration, &parentRounds, &stoppedRounds); err != nil {
+		t.Fatal(err)
+	}
+	if retrievalRounds < 3 || maxIteration != 2 || parentRounds < 1 || stoppedRounds != retrievalRounds {
+		t.Fatalf("retrieval audit rounds=%d max_iteration=%d parents=%d stopped=%d", retrievalRounds, maxIteration, parentRounds, stoppedRounds)
 	}
 	memoryID, err := repository.ProposeProjectMemory(ctx, ProjectMemory{ProjectID: projectID,
 		Key: "payment-retry", Content: "Retries preserve the idempotency key", SourceDocumentID: hits[0].DocumentID},
