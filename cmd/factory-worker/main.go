@@ -39,6 +39,7 @@ func main() {
 		cfg.Projects,
 		logger,
 	)
+	runner.SetV3Features(cfg.V3)
 	if cfg.DeliveryTriggerURL != "" {
 		runner.SetDeliveryClient(delivery.New(cfg.DeliveryTriggerURL, cfg.DeliveryTriggerToken))
 	}

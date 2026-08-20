@@ -1233,6 +1233,21 @@ func (s *Store) StartAgentRun(ctx context.Context, workflowID, workItemID, agent
 }
 
 func (s *Store) FinishAgentRun(ctx context.Context, id, status, artifactID string, runError error) error {
+	return s.FinishAgentRunWithTrace(ctx, id, status, artifactID, AgentRunTrace{}, runError)
+}
+
+type AgentRunTrace struct {
+	ProviderResponseID string
+	InputTokens        int64
+	CachedTokens       int64
+	OutputTokens       int64
+	ReasoningTokens    int64
+	EstimatedCost      int64
+	LatencyMS          int64
+	FinishReason       string
+}
+
+func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifactID string, trace AgentRunTrace, runError error) error {
 	var artifact any
 	if artifactID != "" {
 		artifact = artifactID
@@ -1242,7 +1257,10 @@ func (s *Store) FinishAgentRun(ctx context.Context, id, status, artifactID strin
 		errorSummary = redactError(runError)
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET status=$1,output_artifact_id=$2,
-		error_summary=$3,finished_at=CURRENT_TIMESTAMP WHERE id=$4`,
-		status, artifact, errorSummary, id)
+		error_summary=$3,provider_response_id=$4,input_tokens=$5,cached_tokens=$6,output_tokens=$7,
+		reasoning_tokens=$8,estimated_cost_microunits=$9,latency_ms=$10,finish_reason=$11,
+		finished_at=CURRENT_TIMESTAMP WHERE id=$12`,
+		status, artifact, errorSummary, trace.ProviderResponseID, trace.InputTokens, trace.CachedTokens,
+		trace.OutputTokens, trace.ReasoningTokens, trace.EstimatedCost, trace.LatencyMS, trace.FinishReason, id)
 	return err
 }

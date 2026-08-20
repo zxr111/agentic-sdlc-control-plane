@@ -1,0 +1,74 @@
+package store
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+
+	"github.com/google/uuid"
+)
+
+type ContextEntryInput struct {
+	SourceType     string
+	SourceID       string
+	AuthorityLevel int
+	TokenCount     int
+	ContentHash    string
+	Citation       any
+}
+
+// CreateContextManifest persists the exact ordered source set supplied to an
+// agent. The manifest is append-only and stores hashes and citations rather
+// than copying potentially sensitive source bodies.
+func (s *Store) CreateContextManifest(ctx context.Context, workflowID, purpose, policyVersion string, entries []ContextEntryInput) (string, error) {
+	hash := sha256.New()
+	totalTokens := 0
+	for index, entry := range entries {
+		fmt.Fprintf(hash, "%d:%s:%s:%d:%s\n", index, entry.SourceType, entry.SourceID, entry.AuthorityLevel, entry.ContentHash)
+		totalTokens += entry.TokenCount
+	}
+	manifestID := uuid.NewString()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO context_manifests
+		(id,workflow_id,purpose,policy_version,total_tokens,content_hash) VALUES ($1,$2,$3,$4,$5,$6)`,
+		manifestID, workflowID, purpose, policyVersion, totalTokens, hex.EncodeToString(hash.Sum(nil))); err != nil {
+		return "", err
+	}
+	for index, entry := range entries {
+		citation, err := json.Marshal(entry.Citation)
+		if err != nil {
+			return "", err
+		}
+		var sourceID any
+		if entry.SourceID != "" {
+			sourceID = entry.SourceID
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO context_entries
+			(id,context_manifest_id,ordinal,source_type,source_id,authority_level,token_count,content_hash,citation_json)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, uuid.NewString(), manifestID, index, entry.SourceType,
+			sourceID, entry.AuthorityLevel, entry.TokenCount, entry.ContentHash, string(citation)); err != nil {
+			return "", err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return manifestID, nil
+}
+
+func (s *Store) StartAgentRunWithContext(ctx context.Context, workflowID, workItemID, agentType, model, inputHash, contextManifestID string) (string, error) {
+	id, err := s.StartAgentRun(ctx, workflowID, workItemID, agentType, model, inputHash)
+	if err != nil || contextManifestID == "" {
+		return id, err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET context_manifest_id=$1 WHERE id=$2`, contextManifestID, id); err != nil {
+		return "", err
+	}
+	return id, nil
+}

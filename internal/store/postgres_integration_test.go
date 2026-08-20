@@ -344,3 +344,42 @@ func TestCodexDispatchIsIdempotentAndHasNoLease(t *testing.T) {
 		t.Fatal("unassigned engineer must not receive an existing dispatch")
 	}
 }
+
+func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(time.Now().UnixNano(), 81, "V3 trace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestID, err := repository.CreateContextManifest(ctx, workflow.ID, "REQUIREMENT", "v1", []ContextEntryInput{{
+		SourceType: "CONFLUENCE_SNAPSHOT", AuthorityLevel: 100, TokenCount: 12,
+		ContentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Citation:    map[string]any{"url": "https://example.test/wiki/1", "version": 1},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := repository.StartAgentRunWithContext(ctx, workflow.ID, "", "REQUIREMENT", "test-model",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", manifestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := AgentRunTrace{ProviderResponseID: "resp_test", InputTokens: 120, CachedTokens: 20,
+		OutputTokens: 40, ReasoningTokens: 15, LatencyMS: 321, FinishReason: "completed"}
+	if err := repository.FinishAgentRunWithTrace(ctx, runID, "COMPLETED", "", trace, nil); err != nil {
+		t.Fatal(err)
+	}
+	var gotManifest, responseID, finishReason string
+	var inputTokens, cachedTokens, outputTokens, reasoningTokens, latencyMS int64
+	if err := repository.db.QueryRowContext(ctx, `SELECT context_manifest_id,provider_response_id,input_tokens,
+		cached_tokens,output_tokens,reasoning_tokens,latency_ms,finish_reason FROM agent_runs WHERE id=$1`, runID).
+		Scan(&gotManifest, &responseID, &inputTokens, &cachedTokens, &outputTokens, &reasoningTokens, &latencyMS, &finishReason); err != nil {
+		t.Fatal(err)
+	}
+	if gotManifest != manifestID || responseID != "resp_test" || inputTokens != 120 || cachedTokens != 20 ||
+		outputTokens != 40 || reasoningTokens != 15 || latencyMS != 321 || finishReason != "completed" {
+		t.Fatalf("unexpected trace manifest=%s response=%s tokens=%d/%d/%d/%d latency=%d finish=%s",
+			gotManifest, responseID, inputTokens, cachedTokens, outputTokens, reasoningTokens, latencyMS, finishReason)
+	}
+}

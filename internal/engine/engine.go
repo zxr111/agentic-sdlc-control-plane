@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/agents"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/config"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/confluence"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/delivery"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
@@ -40,7 +41,10 @@ type Engine struct {
 	projects   map[int64]domain.ProjectConfig
 	logger     *slog.Logger
 	delivery   *delivery.Client
+	v3         config.V3Features
 }
+
+func (e *Engine) SetV3Features(features config.V3Features) { e.v3 = features }
 
 func (e *Engine) SetDeliveryClient(client *delivery.Client) {
 	e.delivery = client
@@ -381,15 +385,44 @@ func sourceText(snapshots []domain.Snapshot) string {
 	return out.String()
 }
 
+func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, agentType, inputHash string, snapshots []domain.Snapshot) (string, error) {
+	manifestID := ""
+	if e.v3.ContextManifest {
+		entries := make([]store.ContextEntryInput, 0, len(snapshots))
+		for _, snapshot := range snapshots {
+			entries = append(entries, store.ContextEntryInput{
+				SourceType: "CONFLUENCE_SNAPSHOT", SourceID: snapshot.ID, AuthorityLevel: 100,
+				TokenCount: len(strings.Fields(snapshot.NormalizedText)), ContentHash: snapshot.ContentHash,
+				Citation: map[string]any{"url": snapshot.URL, "page_id": snapshot.ConfluencePageID, "version": snapshot.Version},
+			})
+		}
+		var err error
+		manifestID, err = e.store.CreateContextManifest(ctx, workflow.ID, agentType, "v1", entries)
+		if err != nil {
+			return "", err
+		}
+	}
+	return e.store.StartAgentRunWithContext(ctx, workflow.ID, "", agentType, e.agents.Model(), inputHash, manifestID)
+}
+
+func storeTrace(trace agents.Trace) store.AgentRunTrace {
+	return store.AgentRunTrace{
+		ProviderResponseID: trace.ProviderResponseID,
+		InputTokens:        trace.InputTokens, CachedTokens: trace.CachedTokens,
+		OutputTokens: trace.OutputTokens, ReasoningTokens: trace.ReasoningTokens,
+		LatencyMS: trace.Latency.Milliseconds(), FinishReason: trace.FinishReason,
+	}
+}
+
 func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Workflow, project domain.ProjectConfig,
 	snapshots []domain.Snapshot, feedback string) error {
-	runID, err := e.store.StartAgentRun(ctx, workflow.ID, "", "REQUIREMENT", e.agents.Model(), combinedHash(snapshots))
+	runID, err := e.startAgentRun(ctx, workflow, "REQUIREMENT", combinedHash(snapshots), snapshots)
 	if err != nil {
 		return err
 	}
-	review, err := e.agents.ReviewRequirement(ctx, workflow.ID, sourceText(snapshots), feedback)
+	review, trace, err := e.agents.ReviewRequirement(ctx, workflow.ID, sourceText(snapshots), feedback)
 	if err != nil {
-		_ = e.store.FinishAgentRun(ctx, runID, "FAILED", "", err)
+		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
 	}
 	raw, err := json.Marshal(review)
@@ -415,7 +448,7 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 		_ = e.store.FinishAgentRun(ctx, runID, "FAILED", "", err)
 		return err
 	}
-	return e.store.FinishAgentRun(ctx, runID, "COMPLETED", artifact.ID, nil)
+	return e.store.FinishAgentRunWithTrace(ctx, runID, "COMPLETED", artifact.ID, storeTrace(trace), nil)
 }
 
 func artifactHeader(workflow domain.Workflow, snapshots []domain.Snapshot, artifact domain.Artifact) string {
@@ -834,37 +867,38 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 	}
 	reviewJSON, _ := json.Marshal(review)
 	source := sourceText(snapshots)
-	prdRunID, err := e.store.StartAgentRun(ctx, workflow.ID, "", "PRD", e.agents.Model(), workflow.SourceHash)
+	prdRunID, err := e.startAgentRun(ctx, workflow, "PRD", workflow.SourceHash, snapshots)
 	if err != nil {
 		return err
 	}
-	testRunID, err := e.store.StartAgentRun(ctx, workflow.ID, "", "TEST", e.agents.Model(), workflow.SourceHash)
+	testRunID, err := e.startAgentRun(ctx, workflow, "TEST", workflow.SourceHash, snapshots)
 	if err != nil {
 		_ = e.store.FinishAgentRun(ctx, prdRunID, "FAILED", "", err)
 		return err
 	}
 	var prd agents.PRD
 	var tests agents.TestPlan
+	var prdTrace, testTrace agents.Trace
 	var prdErr, testErr error
 	var wait sync.WaitGroup
 	wait.Add(2)
 	go func() {
 		defer wait.Done()
-		prd, prdErr = e.agents.GeneratePRD(ctx, workflow.ID, source, string(reviewJSON), prdFeedback)
+		prd, prdTrace, prdErr = e.agents.GeneratePRD(ctx, workflow.ID, source, string(reviewJSON), prdFeedback)
 	}()
 	go func() {
 		defer wait.Done()
-		tests, testErr = e.agents.GenerateTestPlan(ctx, workflow.ID, source, string(reviewJSON), testFeedback)
+		tests, testTrace, testErr = e.agents.GenerateTestPlan(ctx, workflow.ID, source, string(reviewJSON), testFeedback)
 	}()
 	wait.Wait()
 	if prdErr != nil {
-		_ = e.store.FinishAgentRun(ctx, prdRunID, "FAILED", "", prdErr)
-		_ = e.store.FinishAgentRun(ctx, testRunID, "FAILED", "", testErr)
+		_ = e.store.FinishAgentRunWithTrace(ctx, prdRunID, "FAILED", "", storeTrace(prdTrace), prdErr)
+		_ = e.store.FinishAgentRunWithTrace(ctx, testRunID, "FAILED", "", storeTrace(testTrace), testErr)
 		return prdErr
 	}
 	if testErr != nil {
-		_ = e.store.FinishAgentRun(ctx, prdRunID, "COMPLETED", "", nil)
-		_ = e.store.FinishAgentRun(ctx, testRunID, "FAILED", "", testErr)
+		_ = e.store.FinishAgentRunWithTrace(ctx, prdRunID, "COMPLETED", "", storeTrace(prdTrace), nil)
+		_ = e.store.FinishAgentRunWithTrace(ctx, testRunID, "FAILED", "", storeTrace(testTrace), testErr)
 		return testErr
 	}
 	prdRaw, _ := json.Marshal(prd)
@@ -902,10 +936,10 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 		_ = e.store.FinishAgentRun(ctx, testRunID, "FAILED", "", err)
 		return err
 	}
-	if err := e.store.FinishAgentRun(ctx, prdRunID, "COMPLETED", prdArtifact.ID, nil); err != nil {
+	if err := e.store.FinishAgentRunWithTrace(ctx, prdRunID, "COMPLETED", prdArtifact.ID, storeTrace(prdTrace), nil); err != nil {
 		return err
 	}
-	return e.store.FinishAgentRun(ctx, testRunID, "COMPLETED", testArtifact.ID, nil)
+	return e.store.FinishAgentRunWithTrace(ctx, testRunID, "COMPLETED", testArtifact.ID, storeTrace(testTrace), nil)
 }
 
 func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchitectureEvent) error {
@@ -939,14 +973,14 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 	if err != nil {
 		return err
 	}
-	runID, err := e.store.StartAgentRun(ctx, workflow.ID, "", "ARCHITECTURE", e.agents.Model(), workflow.SourceHash)
+	runID, err := e.startAgentRun(ctx, workflow, "ARCHITECTURE", workflow.SourceHash, snapshots)
 	if err != nil {
 		return err
 	}
-	value, err := e.agents.GenerateArchitecture(ctx, workflow.ID, sourceText(snapshots),
+	value, trace, err := e.agents.GenerateArchitecture(ctx, workflow.ID, sourceText(snapshots),
 		string(requirement.Content), string(prd.Content), string(testPlan.Content), event.Feedback)
 	if err != nil {
-		_ = e.store.FinishAgentRun(ctx, runID, "FAILED", "", err)
+		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
 	}
 	raw, err := json.Marshal(value)
@@ -974,7 +1008,7 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 		_ = e.store.FinishAgentRun(ctx, runID, "FAILED", "", err)
 		return err
 	}
-	return e.store.FinishAgentRun(ctx, runID, "COMPLETED", artifact.ID, nil)
+	return e.store.FinishAgentRunWithTrace(ctx, runID, "COMPLETED", artifact.ID, storeTrace(trace), nil)
 }
 
 func (e *Engine) reworkGate(ctx context.Context, workflow domain.Workflow, gate domain.Gate, feedback string) error {
