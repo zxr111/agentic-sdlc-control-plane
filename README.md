@@ -119,3 +119,7 @@ Non-secret configuration includes `GITLAB_API_URL`, `CONFLUENCE_BASE_URL`, `OPEN
 - `deploy/overlays/test`: ACK test-environment manifests.
 
 See [`docs/architecture.md`](docs/architecture.md), [`docs/security.md`](docs/security.md), and [`docs/testing.md`](docs/testing.md) for the implementation contract.
+
+## V3 design
+
+The proposed governed Agent platform extension is documented in Chinese under [`docs/v3/`](docs/v3/README.md). It covers versioned prompts and models, context manifests, hybrid RAG, governed project memory, multi-Agent review, tool and MCP policy, evaluation, security, and phased delivery.
