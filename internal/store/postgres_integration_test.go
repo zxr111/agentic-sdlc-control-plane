@@ -552,6 +552,10 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	if err != nil || len(hits) != 1 || hits[0].SourceVersion != "7" || hits[0].AuthorityLevel != 100 {
 		t.Fatalf("unexpected search hits=%#v err=%v", hits, err)
 	}
+	selectedHits := append([]KnowledgeHit(nil), hits...)
+	if _, err := repository.ProposeProjectMemory(ctx, ProjectMemory{ProjectID: projectID, Key: "missing-source", Content: "invalid"}, nil); err == nil {
+		t.Fatal("memory without source was accepted")
+	}
 	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(projectID, 82, "idempotency"))
 	if err != nil {
 		t.Fatal(err)
@@ -592,8 +596,22 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	if err != nil || len(memories) != 0 {
 		t.Fatalf("revoked memory remained active %#v err=%v", memories, err)
 	}
+	if _, err := repository.ProposeProjectMemory(ctx, ProjectMemory{ProjectID: projectID, Key: "source-revocation",
+		Content: "must disappear with source", SourceDocumentID: hits[0].DocumentID}, []string{hits[0].ChunkID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ReviewProjectMemory(ctx, projectID, "source-revocation", "APPROVE", "engineer", nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.RevokeKnowledgeSource(ctx, projectID, "CONFLUENCE", "page-42"); err != nil {
 		t.Fatal(err)
+	}
+	if err := repository.ValidateKnowledgeHits(ctx, selectedHits); err == nil {
+		t.Fatal("revoked citation remained valid")
+	}
+	memories, err = repository.ActiveProjectMemories(ctx, projectID)
+	if err != nil || len(memories) != 0 {
+		t.Fatalf("memory from revoked source remained active %#v err=%v", memories, err)
 	}
 	hits, err = repository.SearchKnowledge(ctx, projectID, "idempotency", 0, 10)
 	if err != nil || len(hits) != 0 {

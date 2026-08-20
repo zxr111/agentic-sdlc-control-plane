@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
@@ -38,6 +39,22 @@ type KnowledgeHit struct {
 	LexicalScore   float64 `json:"lexical_score"`
 	VectorScore    float64 `json:"vector_score"`
 	RerankScore    float64 `json:"rerank_score"`
+}
+
+func (s *Store) ValidateKnowledgeHits(ctx context.Context, hits []KnowledgeHit) error {
+	for _, hit := range hits {
+		var valid bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM knowledge_chunks kc
+			JOIN knowledge_versions kv ON kv.id=kc.knowledge_version_id JOIN knowledge_documents kd ON kd.id=kv.document_id
+			WHERE kc.id=$1 AND kc.content_hash=$2 AND kv.source_version=$3 AND kv.status='ACTIVE' AND kd.status='ACTIVE')`,
+			hit.ChunkID, hit.ContentHash, hit.SourceVersion).Scan(&valid); err != nil {
+			return err
+		}
+		if !valid {
+			return errors.New("retrieved knowledge citation is no longer valid")
+		}
+	}
+	return nil
 }
 
 // RetrieveKnowledge performs a bounded project-scoped retrieval and records
@@ -77,6 +94,9 @@ func (s *Store) RetrieveKnowledge(ctx context.Context, workflowID string, projec
 }
 
 func (s *Store) IngestKnowledge(ctx context.Context, source KnowledgeSource) (string, bool, error) {
+	if err := knowledge.ValidateDocument(source.Content); err != nil {
+		return "", false, err
+	}
 	digest := sha256.Sum256([]byte(source.Content))
 	contentHash := hex.EncodeToString(digest[:])
 	scope, err := json.Marshal(source.AccessScope)
@@ -190,6 +210,9 @@ type ProjectMemory struct {
 }
 
 func (s *Store) ProposeProjectMemory(ctx context.Context, memory ProjectMemory, evidence any) (string, error) {
+	if memory.SourceDocumentID == "" {
+		return "", errors.New("project memory requires a source document")
+	}
 	if memory.ID == "" {
 		memory.ID = uuid.NewString()
 	}
@@ -197,10 +220,7 @@ func (s *Store) ProposeProjectMemory(ctx context.Context, memory ProjectMemory, 
 	if err != nil {
 		return "", err
 	}
-	var source any
-	if memory.SourceDocumentID != "" {
-		source = memory.SourceDocumentID
-	}
+	source := any(memory.SourceDocumentID)
 	_, err = s.db.ExecContext(ctx, `INSERT INTO project_memories
 		(id,project_id,memory_key,content,status,source_document_id,evidence_json)
 		VALUES ($1,$2,$3,$4,'CANDIDATE',$5,$6)
@@ -218,7 +238,8 @@ func (s *Store) ReviewProjectMemory(ctx context.Context, projectID int64, key, d
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE project_memories SET status=$1,approved_by=$2,
 		approved_at=CURRENT_TIMESTAMP,expires_at=$3,updated_at=CURRENT_TIMESTAMP
-		WHERE project_id=$4 AND memory_key=$5 AND status IN ('CANDIDATE','REVIEW_REQUIRED','ACTIVE')`,
+		WHERE project_id=$4 AND memory_key=$5 AND source_document_id IS NOT NULL
+		AND status IN ('CANDIDATE','REVIEW_REQUIRED','ACTIVE')`,
 		status, actor, expiresAt, projectID, key)
 	if err != nil {
 		return err
@@ -234,8 +255,9 @@ func (s *Store) ReviewProjectMemory(ctx context.Context, projectID int64, key, d
 }
 
 func (s *Store) ActiveProjectMemories(ctx context.Context, projectID int64) ([]ProjectMemory, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,project_id,memory_key,content,status,COALESCE(source_document_id::text,'')
-		FROM project_memories WHERE project_id=$1 AND status='ACTIVE' AND (expires_at IS NULL OR expires_at>CURRENT_TIMESTAMP)
+	rows, err := s.db.QueryContext(ctx, `SELECT pm.id,pm.project_id,pm.memory_key,pm.content,pm.status,pm.source_document_id::text
+		FROM project_memories pm JOIN knowledge_documents kd ON kd.id=pm.source_document_id
+		WHERE pm.project_id=$1 AND pm.status='ACTIVE' AND kd.status='ACTIVE' AND (pm.expires_at IS NULL OR pm.expires_at>CURRENT_TIMESTAMP)
 		ORDER BY memory_key`, projectID)
 	if err != nil {
 		return nil, err

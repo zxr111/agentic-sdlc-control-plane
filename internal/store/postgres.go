@@ -650,6 +650,17 @@ func (s *Store) LatestArtifact(ctx context.Context, workflowID string, artifactT
 	return value, err
 }
 
+func (s *Store) ArtifactByID(ctx context.Context, artifactID string) (domain.Artifact, error) {
+	var value domain.Artifact
+	err := s.db.QueryRowContext(ctx, `SELECT id,workflow_id,artifact_type,artifact_version,source_hash,
+		content_json,markdown,model,prompt_version,generated_at FROM artifacts WHERE id=$1`, artifactID).
+		Scan(&value.ID, &value.WorkflowID, &value.Type, &value.Version, &value.SourceHash, &value.Content, &value.Markdown, &value.Model, &value.Prompt, &value.GeneratedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.Artifact{}, ErrNotFound
+	}
+	return value, err
+}
+
 func (s *Store) NextArtifactVersion(ctx context.Context, workflowID string, artifactType domain.ArtifactType) (int, error) {
 	var version int
 	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(artifact_version),0)+1 FROM artifacts

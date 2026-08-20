@@ -284,6 +284,15 @@ func (e *Engine) handleIssueChanged(ctx context.Context, event webhook.IssueChan
 	if err != nil {
 		return err
 	}
+	if e.v3.RAG {
+		_, _, err := e.store.IngestKnowledge(ctx, store.KnowledgeSource{ProjectID: event.ProjectID, SourceType: "GITLAB_ISSUE",
+			SourceKey: fmt.Sprintf("%d/%d", event.ProjectID, event.IssueIID), SourceVersion: event.EventID, Title: issue.Title,
+			AuthorityLevel: 60, AccessScope: map[string]any{"gitlab_project_id": event.ProjectID},
+			Content: issue.Title + "\n\n" + issue.Description, ParentPath: "GitLab Issue"})
+		if err != nil {
+			return fmt.Errorf("index GitLab issue: %w", err)
+		}
+	}
 	switch workflow.State {
 	case domain.StateNew:
 		if err := e.store.Transition(ctx, workflow.ID, domain.StateIngesting, "eligible intake issue received", nil); err != nil {
@@ -429,6 +438,9 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 			if err != nil {
 				return "", "", fmt.Errorf("retrieve governed context: %w", err)
 			}
+			if err := e.store.ValidateKnowledgeHits(ctx, hits); err != nil {
+				return "", "", fmt.Errorf("validate governed citations: %w", err)
+			}
 			if len(hits) > 0 {
 				var supplemental strings.Builder
 				supplemental.WriteString("\n\n--- 受治理的补充知识（不覆盖上述权威需求）---\n")
@@ -440,6 +452,24 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 							"source_version": hit.SourceVersion, "title": hit.Title}})
 				}
 				contextText += supplemental.String()
+			}
+		}
+		if e.v3.Memory {
+			memories, err := e.store.ActiveProjectMemories(ctx, workflow.GitLabProjectID)
+			if err != nil {
+				return "", "", fmt.Errorf("load governed project memory: %w", err)
+			}
+			if len(memories) > 0 {
+				var memoryText strings.Builder
+				memoryText.WriteString("\n\n--- 经工程师批准的项目记忆（低于权威需求）---\n")
+				for _, memory := range memories {
+					digest := sha256.Sum256([]byte(memory.Content))
+					hash := hex.EncodeToString(digest[:])
+					fmt.Fprintf(&memoryText, "\n[%s / SHA-256 %s]\n%s\n", memory.Key, hash, memory.Content)
+					entries = append(entries, store.ContextEntryInput{SourceType: "PROJECT_MEMORY", SourceID: memory.ID, AuthorityLevel: 70,
+						TokenCount: len(strings.Fields(memory.Content)), ContentHash: hash, Citation: map[string]any{"memory_key": memory.Key, "source_document_id": memory.SourceDocumentID}})
+				}
+				contextText += memoryText.String()
 			}
 		}
 		project := e.projects[workflow.GitLabProjectID]
@@ -665,6 +695,18 @@ func (e *Engine) handleGateCommand(ctx context.Context, event webhook.GateNote) 
 	}
 	if err := e.store.DecideGate(ctx, gate, event.Command.Action, event.UserID, event.Username, event.Command.Feedback); err != nil {
 		return err
+	}
+	if event.Command.Action == domain.ActionApprove && e.v3.RAG {
+		artifact, err := e.store.ArtifactByID(ctx, gate.ArtifactID)
+		if err != nil {
+			return err
+		}
+		_, _, err = e.store.IngestKnowledge(ctx, store.KnowledgeSource{ProjectID: workflow.GitLabProjectID, SourceType: "APPROVED_ARTIFACT",
+			SourceKey: artifact.ID, SourceVersion: fmt.Sprintf("%d", artifact.Version), Title: string(artifact.Type), AuthorityLevel: 90,
+			AccessScope: map[string]any{"gitlab_project_id": workflow.GitLabProjectID}, Content: artifact.Markdown + "\n" + string(artifact.Content), ParentPath: string(artifact.Type)})
+		if err != nil {
+			return fmt.Errorf("index approved artifact: %w", err)
+		}
 	}
 	ack := fmt.Sprintf("Gate `%s` recorded `%s` from @%s.", gate.ID, event.Command.Action, event.Username)
 	if err := e.queueStatusNote(ctx, workflow, "gate-decision:"+gate.ID, "<!-- ai-factory:decision:"+gate.ID+" -->", ack); err != nil {
@@ -1415,6 +1457,15 @@ func (e *Engine) handleLifecycleEvent(ctx context.Context, event webhook.Lifecyc
 		if err != nil {
 			return err
 		}
+		if e.v3.RAG {
+			content := fmt.Sprintf("Merge Request !%d\nTitle: %s\nState: %s\nSource: %s\nTarget: %s\nHead SHA: %s\nURL: %s",
+				mr.IID, mr.Title, mr.State, mr.SourceBranch, mr.TargetBranch, mr.SHA, mr.WebURL)
+			if _, _, err := e.store.IngestKnowledge(ctx, store.KnowledgeSource{ProjectID: event.ProjectID, SourceType: "GITLAB_MR",
+				SourceKey: fmt.Sprintf("%d/%d", event.ProjectID, mr.IID), SourceVersion: mr.SHA + ":" + mr.State, Title: mr.Title,
+				AuthorityLevel: 50, AccessScope: map[string]any{"gitlab_project_id": event.ProjectID}, Content: content, ParentPath: "GitLab MR"}); err != nil {
+				return fmt.Errorf("index GitLab MR: %w", err)
+			}
+		}
 		if mr.State == "merged" || event.Action == "merge" {
 			if item.State == domain.WorkItemMerged || item.State == domain.WorkItemCompleted {
 				return nil
@@ -1502,6 +1553,14 @@ func (e *Engine) handleLifecycleEvent(ctx context.Context, event webhook.Lifecyc
 			if err := e.store.UpsertPipelineRun(ctx, item.WorkflowID, item.ID, event.ObjectID,
 				event.SourceBranch, event.SHA, event.Status, event.URL); err != nil {
 				return err
+			}
+		}
+		if e.v3.RAG {
+			content := fmt.Sprintf("Pipeline %d\nBranch: %s\nCommit SHA: %s\nStatus: %s\nURL: %s", event.ObjectID, event.SourceBranch, event.SHA, event.Status, event.URL)
+			if _, _, err := e.store.IngestKnowledge(ctx, store.KnowledgeSource{ProjectID: event.ProjectID, SourceType: "GITLAB_PIPELINE",
+				SourceKey: fmt.Sprintf("%d/%d", event.ProjectID, event.ObjectID), SourceVersion: event.SHA + ":" + event.Status, Title: fmt.Sprintf("Pipeline %d", event.ObjectID),
+				AuthorityLevel: 50, AccessScope: map[string]any{"gitlab_project_id": event.ProjectID}, Content: content, ParentPath: "GitLab Pipeline"}); err != nil {
+				return fmt.Errorf("index GitLab pipeline: %w", err)
 			}
 		}
 		if event.Status == "failed" {
