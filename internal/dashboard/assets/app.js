@@ -2,51 +2,28 @@
   "use strict";
 
   const states = [
-    ["NEW", "Intake"],
-    ["INGESTING", "Source ingest"],
-    ["REQUIREMENT_ANALYSIS", "Requirement AI"],
-    ["WAITING_REQUIREMENT_REVIEW", "Requirement gate"],
-    ["MATERIALIZING_WORK_ITEMS", "Create work"],
-    ["PRD_GENERATING", "PRD + test AI"],
-    ["WAITING_PRD_AND_TEST_REVIEW", "Planning gates"],
-    ["READY_FOR_ARCHITECTURE", "Architecture ready"],
-    ["ARCHITECTURE_GENERATING", "Architecture AI"],
-    ["WAITING_ARCHITECTURE_REVIEW", "Architecture gate"],
-    ["PLANNING", "Implementation plan"],
-    ["EXECUTING_WORK_ITEMS", "Codex delivery"],
-    ["ASSEMBLING_RELEASE", "Assemble release"],
-    ["RELEASE_CI_RUNNING", "Release CI"],
-    ["STAGING_DEPLOYING", "Stage deploy"],
-    ["STAGING_VERIFYING", "Stage verify"],
-    ["WAITING_RELEASE_APPROVAL", "Release gate"],
-    ["PRODUCTION_DEPLOYING", "Production deploy"],
-    ["OBSERVING", "Observation"],
-    ["COMPLETED", "Completed"]
+    ["NEW", "需求接入"], ["INGESTING", "读取来源"], ["REQUIREMENT_ANALYSIS", "需求分析"],
+    ["WAITING_REQUIREMENT_REVIEW", "需求门禁"], ["MATERIALIZING_WORK_ITEMS", "创建工作项"],
+    ["PRD_GENERATING", "生成 PRD 与测试"], ["WAITING_PRD_AND_TEST_REVIEW", "规划门禁"],
+    ["READY_FOR_ARCHITECTURE", "架构就绪"], ["ARCHITECTURE_GENERATING", "架构分析"],
+    ["WAITING_ARCHITECTURE_REVIEW", "架构门禁"], ["PLANNING", "实施规划"],
+    ["EXECUTING_WORK_ITEMS", "Codex 交付"], ["ASSEMBLING_RELEASE", "组装发布"],
+    ["RELEASE_CI_RUNNING", "发布 CI"], ["STAGING_DEPLOYING", "部署测试环境"],
+    ["STAGING_VERIFYING", "验证测试环境"], ["WAITING_RELEASE_APPROVAL", "发布门禁"],
+    ["PRODUCTION_DEPLOYING", "部署生产环境"], ["OBSERVING", "发布观察"], ["COMPLETED", "已完成"]
   ];
 
   const stateLabels = {
-    NEW: "New",
-    INGESTING: "Reading sources",
-    REQUIREMENT_ANALYSIS: "Requirement analysis",
-    WAITING_REQUIREMENT_REVIEW: "Requirement review",
-    MATERIALIZING_WORK_ITEMS: "Creating work items",
-    PRD_GENERATING: "Generating PRD & tests",
-    WAITING_PRD_AND_TEST_REVIEW: "PRD & test review",
-    READY_FOR_ARCHITECTURE: "Ready for architecture",
-    ARCHITECTURE_GENERATING: "Generating architecture",
-    WAITING_ARCHITECTURE_REVIEW: "Architecture review",
-    PLANNING: "Implementation planning",
-    EXECUTING_WORK_ITEMS: "Executing work items",
-    ASSEMBLING_RELEASE: "Assembling release",
-    RELEASE_CI_RUNNING: "Release CI",
-    STAGING_DEPLOYING: "Deploying staging",
-    STAGING_VERIFYING: "Verifying staging",
-    WAITING_RELEASE_APPROVAL: "Release approval",
-    PRODUCTION_DEPLOYING: "Deploying production",
-    OBSERVING: "Observing release",
-    COMPLETED: "Completed",
-    PAUSED: "Paused",
-    CANCELLED: "Cancelled"
+    NEW: "新建", INGESTING: "读取来源中", REQUIREMENT_ANALYSIS: "需求分析中",
+    WAITING_REQUIREMENT_REVIEW: "等待需求审批", MATERIALIZING_WORK_ITEMS: "创建工作项中",
+    PRD_GENERATING: "生成 PRD 与测试中", WAITING_PRD_AND_TEST_REVIEW: "等待 PRD 与测试审批",
+    READY_FOR_ARCHITECTURE: "架构就绪", ARCHITECTURE_GENERATING: "生成架构中",
+    WAITING_ARCHITECTURE_REVIEW: "等待架构审批", PLANNING: "实施规划中",
+    EXECUTING_WORK_ITEMS: "执行工作项中", ASSEMBLING_RELEASE: "组装发布中",
+    RELEASE_CI_RUNNING: "发布 CI 运行中", STAGING_DEPLOYING: "部署测试环境中",
+    STAGING_VERIFYING: "验证测试环境中", WAITING_RELEASE_APPROVAL: "等待发布审批",
+    PRODUCTION_DEPLOYING: "部署生产环境中", OBSERVING: "发布观察中", COMPLETED: "已完成",
+    PAUSED: "已暂停", CANCELLED: "已取消"
   };
 
   const gateStates = new Set([
@@ -70,7 +47,7 @@
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 
-  const shortHash = value => value ? `${value.slice(0, 10)}…${value.slice(-6)}` : "Not captured";
+  const shortHash = value => value ? `${value.slice(0, 10)}…${value.slice(-6)}` : "尚未记录";
   const relativeTime = value => {
     const date = new Date(value);
     const seconds = Math.round((date.getTime() - Date.now()) / 1000);
@@ -138,7 +115,7 @@
     byID("workflow-count").textContent = workflows.length;
     if (!workflows.length) {
       byID("workflow-list").innerHTML = `<div class="list-placeholder">${
-        app.data.workflows.length ? "No workflow matches this view." : "No workflow has been triggered yet."
+        app.data.workflows.length ? "没有符合当前筛选条件的工作流。" : "尚未触发工作流。"
       }</div>`;
       return;
     }
@@ -146,12 +123,12 @@
       <button class="workflow-item ${workflow.id === app.selectedID ? "is-selected" : ""}"
         type="button" data-workflow-id="${escapeHTML(workflow.id)}">
         <span class="workflow-item-top">
-          <span class="issue-ref">${escapeHTML(workflow.project_path || `Project ${workflow.gitlab_project_id}`)} · #${workflow.issue_iid}</span>
+          <span class="issue-ref">${escapeHTML(workflow.project_path || `项目 ${workflow.gitlab_project_id}`)} · #${workflow.issue_iid}</span>
           <span class="state-pill ${workflowStateClass(workflow)}">${escapeHTML(stateLabels[workflow.state] || workflow.state)}</span>
         </span>
         <span class="workflow-title">${escapeHTML(workflow.issue_title)}</span>
         <span class="workflow-meta">
-          <span><span class="state-dot ${workflowStateClass(workflow)}"></span>Revision ${workflow.revision}</span>
+          <span><span class="state-dot ${workflowStateClass(workflow)}"></span>修订 ${workflow.revision}</span>
           <span>${relativeTime(workflow.updated_at)}</span>
         </span>
       </button>
@@ -181,7 +158,7 @@
     const open = workflow.gates.filter(gate => gate.status === "OPEN");
     if (!open.length) {
       const recent = workflow.gates.slice(0, 3);
-      if (!recent.length) return `<div class="empty-panel">No Engineer Gate has opened yet.</div>`;
+      if (!recent.length) return `<div class="empty-panel">尚未开启工程师门禁。</div>`;
       return recent.map(gate => `
         <div class="gate-card">
           <div class="panel-title-row">
@@ -219,7 +196,7 @@
   }
 
   function renderArtifacts(workflow) {
-    if (!workflow.artifacts.length) return `<div class="empty-panel">Artifacts appear after the first Agent completes.</div>`;
+    if (!workflow.artifacts.length) return `<div class="empty-panel">Agent 首次完成后将在此显示制品。</div>`;
     return workflow.artifacts.map(artifact => `
       <div class="artifact-card">
         <div class="panel-title-row">
@@ -238,7 +215,7 @@
   }
 
   function renderSources(workflow) {
-    if (!workflow.sources.length) return `<div class="empty-panel">Waiting for Confluence ingestion.</div>`;
+    if (!workflow.sources.length) return `<div class="empty-panel">等待读取 Confluence 需求。</div>`;
     return workflow.sources.map(source => `
       <div class="source-card">
         <a class="source-title" href="${escapeHTML(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(source.title)}</a>
@@ -264,7 +241,7 @@
   }
 
   function renderActivity(workflow) {
-    if (!workflow.activity.length) return `<div class="empty-panel">No audit activity recorded.</div>`;
+    if (!workflow.activity.length) return `<div class="empty-panel">尚无审计活动。</div>`;
     return `<div class="timeline">${workflow.activity.slice(0, 12).map(activity => `
       <div class="timeline-item">
         <div class="timeline-type">${escapeHTML(activity.type.replaceAll(".", " · "))}</div>
@@ -276,7 +253,7 @@
 
   function renderWorkItems(workflow) {
     const items = workflow.work_items || [];
-    if (!items.length) return `<div class="empty-panel">Work items appear after Requirement approval.</div>`;
+    if (!items.length) return `<div class="empty-panel">需求审批后将在此显示工作项。</div>`;
     return items.map(item => `
       <div class="artifact-card">
         <div class="panel-title-row">
@@ -295,7 +272,7 @@
 
   function renderAgentRuns(workflow) {
     const runs = workflow.agent_runs || [];
-    if (!runs.length) return `<div class="empty-panel">Agent runs appear when Factory starts generation or quality work.</div>`;
+    if (!runs.length) return `<div class="empty-panel">工厂开始生成或质量任务后将在此显示 Agent 运行。</div>`;
     return runs.slice(0, 12).map(run => `
       <div class="artifact-card">
         <div class="panel-title-row">
@@ -318,8 +295,8 @@
       byID("workflow-detail").innerHTML = `
         <section class="empty-state">
           <div class="empty-visual" aria-hidden="true"><span></span><span></span><span></span></div>
-          <p class="eyebrow">${app.data.workflows.length ? "No workflow selected" : "Factory is ready"}</p>
-          <h2>${app.data.workflows.length ? "Choose a workflow to inspect its journey" : "Waiting for the first intake event"}</h2>
+          <p class="eyebrow">${app.data.workflows.length ? "尚未选择工作流" : "软件工厂已就绪"}</p>
+          <h2>${app.data.workflows.length ? "选择工作流查看完整交付过程" : "等待第一个需求接入事件"}</h2>
           <p>${app.data.workflows.length
             ? "Inspect Agent progress, Engineer Gates, traceability, failures, and audit history."
             : "Create an open GitLab Issue with a Confluence link and the automation::enabled label."}</p>
@@ -334,14 +311,14 @@
           <span class="state-pill ${stateClass(workflow.state)}">${escapeHTML(stateLabels[workflow.state] || workflow.state)}</span>
           <h2>${escapeHTML(workflow.issue_title)}</h2>
           <div class="detail-meta">
-            <span>${escapeHTML(workflow.project_path || `Project ${workflow.gitlab_project_id}`)} #${workflow.issue_iid}</span>
-            <span>Revision ${workflow.revision}</span>
+            <span>${escapeHTML(workflow.project_path || `项目 ${workflow.gitlab_project_id}`)} #${workflow.issue_iid}</span>
+            <span>修订 ${workflow.revision}</span>
             <span>Updated ${relativeTime(workflow.updated_at)}</span>
             <span class="hash">Source ${escapeHTML(shortHash(workflow.source_hash))}</span>
           </div>
         </div>
         <div class="header-actions">
-          ${workflow.issue_url ? `<a class="button button-primary" href="${escapeHTML(workflow.issue_url)}" target="_blank" rel="noopener noreferrer">Open GitLab Issue</a>` : ""}
+          ${workflow.issue_url ? `<a class="button button-primary" href="${escapeHTML(workflow.issue_url)}" target="_blank" rel="noopener noreferrer">打开 GitLab Issue</a>` : ""}
         </div>
       </header>
 
@@ -418,12 +395,8 @@
   function renderOperations() {
     const queue = app.data.queues;
     const values = [
-      ["Events ready", queue.events_ready],
-      ["Events processing", queue.events_processing],
-      ["Events dead", queue.events_dead],
-      ["Outbox ready", queue.outbox_ready],
-      ["Outbox processing", queue.outbox_processing],
-      ["Outbox dead", queue.outbox_dead]
+      ["待处理事件", queue.events_ready], ["处理中事件", queue.events_processing], ["事件死信", queue.events_dead],
+      ["待发送消息", queue.outbox_ready], ["发送中消息", queue.outbox_processing], ["消息死信", queue.outbox_dead]
     ];
     byID("queue-grid").innerHTML = values.map(([label, value]) => `
       <div class="queue-item">
@@ -435,7 +408,7 @@
     const dead = queue.events_dead + queue.outbox_dead;
     const status = byID("operations-status");
     status.className = `operations-status ${dead ? "is-unhealthy" : "is-healthy"}`;
-    status.textContent = dead ? `${dead} dead item${dead === 1 ? "" : "s"} need attention` : "Queues healthy";
+    status.textContent = dead ? `${dead} 条死信需要处理` : "队列健康";
 
     if (!app.data.failures.length) {
       byID("failure-list").innerHTML = "";
@@ -515,7 +488,7 @@
     if (app.loading) return;
     app.loading = true;
     byID("refresh-button").disabled = true;
-    setConnection("", "Syncing");
+    setConnection("", "同步中");
     try {
       const response = await fetch("/api/dashboard", {
         headers: { Accept: "application/json" },
@@ -524,12 +497,12 @@
       if (!response.ok) throw new Error(`Dashboard returned ${response.status}`);
       app.data = await response.json();
       render();
-      setConnection("online", "Live");
-      byID("updated-at").textContent = `Updated ${relativeTime(app.data.generated_at)}`;
+      setConnection("online", "在线");
+      byID("updated-at").textContent = `更新于${relativeTime(app.data.generated_at)}`;
     } catch (error) {
-      setConnection("offline", "Disconnected");
+      setConnection("offline", "连接已断开");
       byID("updated-at").textContent = error.message;
-      showToast("Could not refresh Factory data.");
+      showToast("无法刷新软件工厂数据。");
     } finally {
       app.loading = false;
       byID("refresh-button").disabled = false;

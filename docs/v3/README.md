@@ -82,6 +82,7 @@ flowchart TB
 - [评测体系](evaluation.md)：历史重放、评分、Shadow、Canary 和持续改进。
 - [安全设计](security.md)：权限边界、Prompt Injection、工具风险和生产锁定。
 - [实施计划](implementation-plan.md)：阶段、验收标准、兼容策略和交付顺序。
+- [测试环境部署与验收手册](test-environment-runbook.md)：开关顺序、部署、端到端验收和回滚。
 
 ## 不在 V3 范围内
 
@@ -103,4 +104,3 @@ V3 完成不等于“代码路径存在”，而是至少满足：
 6. Tool Policy 能阻止越权、跨阶段和高风险自动调用。
 7. Prompt 或模型升级必须经过离线评测、人工审批和 Shadow/Canary。
 8. 本地 Compose 与测试 Kubernetes 环境均能完成端到端验收。
-
