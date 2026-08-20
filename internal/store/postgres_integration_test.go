@@ -417,3 +417,56 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		t.Fatalf("registry versions were not bound profile=%s prompt=%s model=%s", profileVersionID, promptVersionID, modelVersionID)
 	}
 }
+
+func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	projectID := time.Now().UnixNano()
+	source := KnowledgeSource{ProjectID: projectID, SourceType: "CONFLUENCE", SourceKey: "page-42",
+		SourceVersion: "7", Title: "Payment retry", AuthorityLevel: 100,
+		AccessScope: map[string]any{"project_id": projectID},
+		Content:     "payment retry must preserve idempotency key and reject duplicate settlement", ParentPath: "Payment/Retry"}
+	versionID, created, err := repository.IngestKnowledge(ctx, source)
+	if err != nil || !created || versionID == "" {
+		t.Fatalf("ingest failed id=%s created=%t err=%v", versionID, created, err)
+	}
+	duplicateID, created, err := repository.IngestKnowledge(ctx, source)
+	if err != nil || created || duplicateID != versionID {
+		t.Fatalf("ingest was not idempotent id=%s created=%t err=%v", duplicateID, created, err)
+	}
+	hits, err := repository.SearchKnowledge(ctx, projectID, "idempotency", 50, 10)
+	if err != nil || len(hits) != 1 || hits[0].SourceVersion != "7" || hits[0].AuthorityLevel != 100 {
+		t.Fatalf("unexpected search hits=%#v err=%v", hits, err)
+	}
+	memoryID, err := repository.ProposeProjectMemory(ctx, ProjectMemory{ProjectID: projectID,
+		Key: "payment-retry", Content: "Retries preserve the idempotency key", SourceDocumentID: hits[0].DocumentID},
+		[]map[string]string{{"chunk_id": hits[0].ChunkID, "hash": hits[0].ContentHash}})
+	if err != nil || memoryID == "" {
+		t.Fatalf("memory proposal failed id=%s err=%v", memoryID, err)
+	}
+	memories, err := repository.ActiveProjectMemories(ctx, projectID)
+	if err != nil || len(memories) != 0 {
+		t.Fatalf("candidate memory entered active context %#v err=%v", memories, err)
+	}
+	if err := repository.ReviewProjectMemory(ctx, projectID, "payment-retry", "APPROVE", "engineer", nil); err != nil {
+		t.Fatal(err)
+	}
+	memories, err = repository.ActiveProjectMemories(ctx, projectID)
+	if err != nil || len(memories) != 1 {
+		t.Fatalf("approved memory missing %#v err=%v", memories, err)
+	}
+	if err := repository.ReviewProjectMemory(ctx, projectID, "payment-retry", "REVOKE", "engineer", nil); err != nil {
+		t.Fatal(err)
+	}
+	memories, err = repository.ActiveProjectMemories(ctx, projectID)
+	if err != nil || len(memories) != 0 {
+		t.Fatalf("revoked memory remained active %#v err=%v", memories, err)
+	}
+	if err := repository.RevokeKnowledgeSource(ctx, projectID, "CONFLUENCE", "page-42"); err != nil {
+		t.Fatal(err)
+	}
+	hits, err = repository.SearchKnowledge(ctx, projectID, "idempotency", 0, 10)
+	if err != nil || len(hits) != 0 {
+		t.Fatalf("revoked source remained searchable %#v err=%v", hits, err)
+	}
+}

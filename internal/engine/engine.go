@@ -360,6 +360,17 @@ func (e *Engine) ingestSnapshots(ctx context.Context, workflow domain.Workflow, 
 		if err := e.store.SaveSnapshot(ctx, snapshot); err != nil {
 			return nil, "", err
 		}
+		if e.v3.RAG {
+			_, _, err := e.store.IngestKnowledge(ctx, store.KnowledgeSource{
+				ProjectID: workflow.GitLabProjectID, SourceType: "CONFLUENCE", SourceKey: snapshot.ConfluencePageID,
+				SourceVersion: fmt.Sprintf("%d", snapshot.Version), Title: snapshot.Title, AuthorityLevel: 100,
+				AccessScope: map[string]any{"gitlab_project_id": workflow.GitLabProjectID},
+				Content: snapshot.NormalizedText, ParentPath: snapshot.Title,
+			})
+			if err != nil {
+				return nil, "", fmt.Errorf("index Confluence snapshot %s: %w", snapshot.ConfluencePageID, err)
+			}
+		}
 	}
 	return snapshots, hash, nil
 }
