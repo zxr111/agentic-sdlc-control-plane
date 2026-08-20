@@ -4,7 +4,6 @@ x-factory-environment: &factory-environment
   CONFLUENCE_BASE_URL: ${CONFLUENCE_BASE_URL:-https://kylith.atlassian.net}
   OPENAI_API_URL: ${OPENAI_API_URL:-https://api.openai.com/v1}
   OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-terra}
-  DELIVERY_TRIGGER_URL: ${DELIVERY_TRIGGER_URL:-}
   V3_REGISTRY_ENABLED: ${V3_REGISTRY_ENABLED:-false}
   V3_CONTEXT_MANIFEST_ENABLED: ${V3_CONTEXT_MANIFEST_ENABLED:-false}
   V3_EVALUATION_ENABLED: ${V3_EVALUATION_ENABLED:-false}
@@ -86,6 +85,7 @@ services:
       GITLAB_API_TOKEN: ${GITLAB_API_TOKEN:?GITLAB_API_TOKEN is required}
       CONFLUENCE_EMAIL: ${CONFLUENCE_EMAIL:?CONFLUENCE_EMAIL is required}
       CONFLUENCE_API_TOKEN: ${CONFLUENCE_API_TOKEN:?CONFLUENCE_API_TOKEN is required}
+      DELIVERY_TRIGGER_URL: ${DELIVERY_TRIGGER_URL:-}
       DELIVERY_TRIGGER_TOKEN: ${DELIVERY_TRIGGER_TOKEN:-}
       WORKER_ID: compose-worker
       WORKER_EVENT_TYPES: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile

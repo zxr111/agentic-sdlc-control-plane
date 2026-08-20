@@ -56,9 +56,11 @@ func (s *Store) ProposeEvaluationImprovements(ctx context.Context, runID string,
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT es.dimension,AVG(es.score),COALESCE(pd.prompt_key,'evaluation-output'),er.suite_id::text
 		FROM evaluation_runs er JOIN evaluation_outputs eo ON eo.evaluation_run_id=er.id
+		JOIN evaluation_cases ec ON ec.id=eo.evaluation_case_id
 		JOIN evaluation_scores es ON es.evaluation_output_id=eo.id
 		LEFT JOIN prompt_versions pv ON pv.id=er.prompt_version_id LEFT JOIN prompt_definitions pd ON pd.id=pv.prompt_definition_id
-		WHERE er.id=$1 AND er.status='COMPLETED' GROUP BY es.dimension,pd.prompt_key,er.suite_id HAVING AVG(es.score)<$2`, runID, threshold)
+		WHERE er.id=$1 AND er.status='COMPLETED' AND ec.data_split<>'HOLDOUT'
+		GROUP BY es.dimension,pd.prompt_key,er.suite_id HAVING AVG(es.score)<$2`, runID, threshold)
 	if err != nil {
 		return nil, err
 	}

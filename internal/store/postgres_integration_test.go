@@ -1044,4 +1044,8 @@ func TestV3EvaluationRunIsIsolatedAndComparable(t *testing.T) {
 	if workflowWrites != 0 {
 		t.Fatalf("evaluation mutated workflow audit stream: %d", workflowWrites)
 	}
+	ids, err := repository.ProposeEvaluationImprovements(ctx, candidateID, 1)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("holdout findings leaked into automatic improvements ids=%v err=%v", ids, err)
+	}
 }

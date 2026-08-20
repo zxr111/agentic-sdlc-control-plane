@@ -614,6 +614,22 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 	return e.store.FinishAgentRunWithTrace(ctx, runID, "COMPLETED", artifact.ID, storeTrace(trace), nil)
 }
 
+func (e *Engine) analyzeRequirement(ctx context.Context, event AnalyzeRequirementEvent) error {
+	workflow, err := e.store.GetWorkflow(ctx, event.WorkflowID)
+	if err != nil {
+		return err
+	}
+	snapshots, err := e.store.LatestSnapshots(ctx, workflow.ID)
+	if err != nil {
+		return err
+	}
+	project, ok := e.projects[workflow.GitLabProjectID]
+	if !ok {
+		return fmt.Errorf("project %d is not configured", workflow.GitLabProjectID)
+	}
+	return e.publishRequirementGate(ctx, workflow, project, snapshots, event.Feedback)
+}
+
 func artifactHeader(workflow domain.Workflow, snapshots []domain.Snapshot, artifact domain.Artifact) string {
 	var sourceVersions []string
 	for _, snapshot := range snapshots {

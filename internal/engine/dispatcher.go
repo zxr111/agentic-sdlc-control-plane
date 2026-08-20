@@ -37,55 +37,43 @@ func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		return e.handleIssueChanged(ctx, payload)
+		return e.intake().issueChanged(ctx, payload)
 	case "gitlab.gate.command":
 		var payload webhook.GateNote
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		return e.handleGateCommand(ctx, payload)
+		return e.quality().gateCommand(ctx, payload)
 	case "gitlab.control.command":
 		var payload webhook.ControlNote
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		return e.handleControlCommand(ctx, payload)
+		return e.execution().control(ctx, payload)
 	case "gitlab.lifecycle":
 		var payload webhook.LifecycleEvent
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		return e.handleLifecycleEvent(ctx, payload)
+		return e.execution().lifecycle(ctx, payload)
 	case "workflow.generate_plans":
 		var payload GeneratePlansEvent
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		return e.generatePlans(ctx, payload)
+		return e.planning().generatePlans(ctx, payload)
 	case "workflow.analyze_requirement":
 		var payload AnalyzeRequirementEvent
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		workflow, err := e.store.GetWorkflow(ctx, payload.WorkflowID)
-		if err != nil {
-			return err
-		}
-		snapshots, err := e.store.LatestSnapshots(ctx, workflow.ID)
-		if err != nil {
-			return err
-		}
-		project, ok := e.projects[workflow.GitLabProjectID]
-		if !ok {
-			return fmt.Errorf("project %d is not configured", workflow.GitLabProjectID)
-		}
-		return e.publishRequirementGate(ctx, workflow, project, snapshots, payload.Feedback)
+		return e.planning().analyzeRequirement(ctx, payload)
 	case "workflow.generate_architecture":
 		var payload GenerateArchitectureEvent
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		return e.generateArchitecture(ctx, payload)
+		return e.architecture().generate(ctx, payload)
 	case "evaluation.run":
 		if !e.v3.Evaluation {
 			return errors.New("V3 evaluation is disabled")
@@ -101,13 +89,13 @@ func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		return e.handleDeliveryCallback(ctx, payload)
+		return e.release().callback(ctx, payload)
 	case "external.incident":
 		var payload webhook.ExternalCallback
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		return e.handleIncidentCallback(ctx, payload)
+		return e.incident().callback(ctx, payload)
 	case "system.reconcile":
 		return e.reconcile(ctx)
 	default:

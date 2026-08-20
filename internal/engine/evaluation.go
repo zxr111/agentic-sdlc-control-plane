@@ -37,7 +37,33 @@ func (e *Engine) RunPromptEvaluation(ctx context.Context, suiteID, promptVersion
 			return "", err
 		}
 	}
-	runID, err := e.store.StartEvaluationRun(ctx, store.EvaluationRunInput{SuiteID: suiteID, PromptVersionID: promptVersionID, Shadow: true})
+	models, preferredModel, allowFallback, err := e.store.ActiveRoutingModels(ctx)
+	if err != nil {
+		return "", err
+	}
+	modelSnapshot := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		modelSnapshot = append(modelSnapshot, map[string]any{
+			"version_id": model.ID, "model_key": model.Key, "healthy": model.Healthy,
+		})
+	}
+	parameters := map[string]any{
+		"candidate_prompt_version_id":   promptVersionID,
+		"candidate_content_schema_hash": prompt.ContentHash,
+		"judge_enabled":                 judgeEnabled,
+		"deterministic_scorer":          "deterministic-contract@v1",
+		"preferred_model_key":           preferredModel,
+		"allow_model_fallback":          allowFallback,
+		"active_model_snapshot":         modelSnapshot,
+		"case_count":                    len(cases),
+	}
+	if judgeEnabled {
+		parameters["judge_prompt_version_id"] = judge.ID
+		parameters["judge_content_schema_hash"] = judgeRuntime.ContentHash
+	}
+	runID, err := e.store.StartEvaluationRun(ctx, store.EvaluationRunInput{
+		SuiteID: suiteID, PromptVersionID: promptVersionID, Shadow: true, Parameters: parameters,
+	})
 	if err != nil {
 		return "", err
 	}

@@ -216,6 +216,8 @@ type EvaluationComparison struct {
 	Decision  string             `json:"decision"`
 	Baseline  map[string]float64 `json:"baseline"`
 	Candidate map[string]float64 `json:"candidate"`
+	Deltas    map[string]float64 `json:"deltas"`
+	Reasons   []string           `json:"reasons"`
 }
 
 type EvaluationRunSummary struct {
@@ -243,6 +245,27 @@ func (s *Store) EvaluationRunSummary(ctx context.Context, runID string) (Evaluat
 }
 
 func (s *Store) CompareEvaluationRuns(ctx context.Context, baselineRunID, candidateRunID string) (EvaluationComparison, error) {
+	var baselineSuiteID, candidateSuiteID string
+	var passRulesRaw []byte
+	if err := s.db.QueryRowContext(ctx, `SELECT er.suite_id::text,es.pass_rules FROM evaluation_runs er
+		JOIN evaluation_suites es ON es.id=er.suite_id WHERE er.id=$1 AND er.status='COMPLETED'`, baselineRunID).
+		Scan(&baselineSuiteID, &passRulesRaw); err != nil {
+		return EvaluationComparison{}, errors.New("completed baseline run is required")
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT suite_id::text FROM evaluation_runs WHERE id=$1 AND status='COMPLETED'`, candidateRunID).
+		Scan(&candidateSuiteID); err != nil {
+		return EvaluationComparison{}, errors.New("completed candidate run is required")
+	}
+	if baselineSuiteID != candidateSuiteID {
+		return EvaluationComparison{}, errors.New("evaluation runs must use the same suite")
+	}
+	passRules := struct {
+		Minimum       float64 `json:"minimum"`
+		MaxRegression float64 `json:"max_regression"`
+	}{MaxRegression: 0}
+	if err := json.Unmarshal(passRulesRaw, &passRules); err != nil {
+		return EvaluationComparison{}, err
+	}
 	load := func(runID string) (map[string]float64, error) {
 		rows, err := s.db.QueryContext(ctx, `SELECT es.dimension,AVG(es.score)
 			FROM evaluation_scores es JOIN evaluation_outputs eo ON eo.id=es.evaluation_output_id
@@ -275,14 +298,26 @@ func (s *Store) CompareEvaluationRuns(ctx context.Context, baselineRunID, candid
 		return EvaluationComparison{}, errors.New("completed runs with scores are required")
 	}
 	decision := "PASS"
+	deltas := map[string]float64{}
+	reasons := []string{}
 	for dimension, baselineScore := range baseline {
 		candidateScore, ok := candidate[dimension]
-		if !ok || candidateScore < baselineScore {
+		if !ok {
 			decision = "REVIEW"
-			break
+			reasons = append(reasons, "missing dimension: "+dimension)
+			continue
+		}
+		deltas[dimension] = candidateScore - baselineScore
+		if candidateScore < passRules.Minimum {
+			decision = "REVIEW"
+			reasons = append(reasons, "below suite minimum: "+dimension)
+		}
+		if candidateScore-baselineScore < -passRules.MaxRegression {
+			decision = "REVIEW"
+			reasons = append(reasons, "regression exceeds suite allowance: "+dimension)
 		}
 	}
-	comparison := EvaluationComparison{ID: uuid.NewString(), Decision: decision, Baseline: baseline, Candidate: candidate}
+	comparison := EvaluationComparison{ID: uuid.NewString(), Decision: decision, Baseline: baseline, Candidate: candidate, Deltas: deltas, Reasons: reasons}
 	raw, err := json.Marshal(comparison)
 	if err != nil {
 		return EvaluationComparison{}, err
