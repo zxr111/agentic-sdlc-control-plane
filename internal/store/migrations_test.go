@@ -74,6 +74,18 @@ func TestV3RoutingMigrationContainsHealthAndDecisionEvidence(t *testing.T) {
 	}
 }
 
+func TestV3MemoryAndImprovementMigrationContainsGovernedEntities(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/008_v3_memory_and_improvement.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"project_memory_revisions", "improvement_candidates"} {
+		if !strings.Contains(string(content), "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("missing memory and improvement table %s", table)
+		}
+	}
+}
+
 func TestRetryDelayIsBounded(t *testing.T) {
 	if got := retryDelay(100).Seconds(); got != 300 {
 		t.Fatalf("expected 300 seconds, got %v", got)

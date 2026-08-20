@@ -663,12 +663,29 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	if err != nil || len(memories) != 0 {
 		t.Fatalf("candidate memory entered active context %#v err=%v", memories, err)
 	}
+	if err := repository.ReviewProjectMemory(ctx, projectID, "payment-retry", "APPROVE", "engineer", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("candidate bypassed required review submission: %v", err)
+	}
+	if err := repository.SubmitProjectMemoryReview(ctx, projectID, "payment-retry", "review-requester"); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.ReviewProjectMemory(ctx, projectID, "payment-retry", "APPROVE", "engineer", nil); err != nil {
 		t.Fatal(err)
 	}
 	memories, err = repository.ActiveProjectMemories(ctx, projectID)
 	if err != nil || len(memories) != 1 {
 		t.Fatalf("approved memory missing %#v err=%v", memories, err)
+	}
+	if _, err := repository.ProposeProjectMemory(ctx, ProjectMemory{ProjectID: projectID, Key: "payment-retry",
+		Content: "Updated retry memory", SourceDocumentID: hits[0].DocumentID}, []string{hits[0].ChunkID}); err != nil {
+		t.Fatal(err)
+	}
+	var revisions int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM project_memory_revisions WHERE project_memory_id=$1`, memoryID).Scan(&revisions); err != nil || revisions < 2 {
+		t.Fatalf("memory revisions=%d err=%v", revisions, err)
+	}
+	if err := repository.SubmitProjectMemoryReview(ctx, projectID, "payment-retry", "review-requester"); err != nil {
+		t.Fatal(err)
 	}
 	if err := repository.ReviewProjectMemory(ctx, projectID, "payment-retry", "REVOKE", "engineer", nil); err != nil {
 		t.Fatal(err)
@@ -681,8 +698,25 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 		Content: "must disappear with source", SourceDocumentID: hits[0].DocumentID}, []string{hits[0].ChunkID}); err != nil {
 		t.Fatal(err)
 	}
+	if err := repository.SubmitProjectMemoryReview(ctx, projectID, "source-revocation", "review-requester"); err != nil {
+		t.Fatal(err)
+	}
 	if err := repository.ReviewProjectMemory(ctx, projectID, "source-revocation", "APPROVE", "engineer", nil); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := repository.ProposeProjectMemory(ctx, ProjectMemory{ProjectID: projectID, Key: "expired-memory",
+		Content: "temporary guidance", SourceDocumentID: hits[0].DocumentID}, []string{hits[0].ChunkID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SubmitProjectMemoryReview(ctx, projectID, "expired-memory", "review-requester"); err != nil {
+		t.Fatal(err)
+	}
+	expiredAt := time.Now().Add(-time.Minute)
+	if err := repository.ReviewProjectMemory(ctx, projectID, "expired-memory", "APPROVE", "engineer", &expiredAt); err != nil {
+		t.Fatal(err)
+	}
+	if expired, err := repository.ExpireProjectMemories(ctx); err != nil || expired < 1 {
+		t.Fatalf("expired memories=%d err=%v", expired, err)
 	}
 	if err := repository.RevokeKnowledgeSource(ctx, projectID, "CONFLUENCE", "page-42"); err != nil {
 		t.Fatal(err)
@@ -697,6 +731,47 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	hits, err = repository.SearchKnowledge(ctx, projectID, "idempotency", 0, 10)
 	if err != nil || len(hits) != 0 {
 		t.Fatalf("revoked source remained searchable %#v err=%v", hits, err)
+	}
+}
+
+func TestV3ImprovementCandidatesRequireEvidenceAndHumanReview(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	suiteID, err := repository.EnsureEvaluationSuite(ctx, "improvement-"+uuid.NewString(), "REQUIREMENT", map[string]any{"minimum": 0.8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caseID, err := repository.UpsertEvaluationCase(ctx, suiteID, EvaluationCaseInput{Key: "weak-case", Input: map[string]string{"requirement": "test"}, Expected: evaluation.Expectations{}, DataSplit: "TEST"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := repository.StartEvaluationRun(ctx, EvaluationRunInput{SuiteID: suiteID, Shadow: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.RecordEvaluationOutput(ctx, runID, caseID, json.RawMessage(`{"result":"weak"}`), "", time.Millisecond, nil,
+		[]evaluation.Score{{ScorerKey: "deterministic", ScorerVersion: "1", Dimension: "completeness", Value: 0.4}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishEvaluationRun(ctx, runID, nil); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := repository.ProposeEvaluationImprovements(ctx, runID, 0.8)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("improvement ids=%v err=%v", ids, err)
+	}
+	if err := repository.ReviewImprovementCandidate(ctx, ids[0], "APPROVE", "reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	var status, reviewer string
+	if err := repository.db.QueryRowContext(ctx, `SELECT status,reviewed_by FROM improvement_candidates WHERE id=$1`, ids[0]).Scan(&status, &reviewer); err != nil {
+		t.Fatal(err)
+	}
+	if status != "APPROVED" || reviewer != "reviewer" {
+		t.Fatalf("unexpected improvement review status=%s reviewer=%s", status, reviewer)
+	}
+	if _, err := repository.CreateImprovementCandidate(ctx, ImprovementCandidateInput{CandidateType: "MANUAL", TargetKey: "prompt", ExpectedImprovement: "better", RiskSummary: "risk"}); err == nil {
+		t.Fatal("improvement without source evidence was accepted")
 	}
 }
 

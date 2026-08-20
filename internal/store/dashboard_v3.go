@@ -20,6 +20,7 @@ type DashboardV3 struct {
 	Canaries     []DashboardV3Canary      `json:"canaries"`
 	Activations  []DashboardV3Activation  `json:"activations"`
 	ModelHealth  []DashboardV3ModelHealth `json:"model_health"`
+	Improvements []DashboardV3Improvement `json:"improvements"`
 }
 
 type DashboardV3Registry struct {
@@ -138,6 +139,15 @@ type DashboardV3ModelHealth struct {
 	ErrorSummary string    `json:"error_summary,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
 }
+type DashboardV3Improvement struct {
+	ID                  string    `json:"id"`
+	CandidateType       string    `json:"candidate_type"`
+	TargetKey           string    `json:"target_key"`
+	ExpectedImprovement string    `json:"expected_improvement"`
+	RiskSummary         string    `json:"risk_summary"`
+	Status              string    `json:"status"`
+	CreatedAt           time.Time `json:"created_at"`
+}
 
 func (s *Store) loadDashboardV3(ctx context.Context, result *DashboardV3, limit int) error {
 	result.AgentRuns = []DashboardV3AgentRun{}
@@ -150,6 +160,7 @@ func (s *Store) loadDashboardV3(ctx context.Context, result *DashboardV3, limit 
 	result.Canaries = []DashboardV3Canary{}
 	result.Activations = []DashboardV3Activation{}
 	result.ModelHealth = []DashboardV3ModelHealth{}
+	result.Improvements = []DashboardV3Improvement{}
 	if err := s.db.QueryRowContext(ctx, `SELECT
 		(SELECT count(*) FROM prompt_versions WHERE status='ACTIVE'),
 		(SELECT count(*) FROM model_versions WHERE status='ACTIVE'),
@@ -184,7 +195,7 @@ func (s *Store) loadDashboardV3(ctx context.Context, result *DashboardV3, limit 
 		(SELECT count(*) FROM knowledge_versions WHERE status='ACTIVE'),
 		(SELECT count(*) FROM knowledge_chunks),
 		(SELECT count(*) FROM project_memories WHERE status='ACTIVE' AND (expires_at IS NULL OR expires_at>now())),
-		(SELECT count(*) FROM project_memories WHERE status='CANDIDATE')`).Scan(&result.Knowledge.ActiveDocuments,
+		(SELECT count(*) FROM project_memories WHERE status IN ('CANDIDATE','REVIEW_REQUIRED'))`).Scan(&result.Knowledge.ActiveDocuments,
 		&result.Knowledge.ActiveVersions, &result.Knowledge.Chunks, &result.Knowledge.ApprovedMemories,
 		&result.Knowledge.CandidateMemories); err != nil {
 		return err
@@ -192,7 +203,27 @@ func (s *Store) loadDashboardV3(ctx context.Context, result *DashboardV3, limit 
 	if err := s.loadDashboardV3ToolCalls(ctx, result, limit); err != nil {
 		return err
 	}
-	return s.loadDashboardV3Governance(ctx, result, limit)
+	if err := s.loadDashboardV3Governance(ctx, result, limit); err != nil {
+		return err
+	}
+	return s.loadDashboardV3Improvements(ctx, result, limit)
+}
+
+func (s *Store) loadDashboardV3Improvements(ctx context.Context, result *DashboardV3, limit int) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id::text,candidate_type,target_key,expected_improvement,risk_summary,status,created_at
+		FROM improvement_candidates ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item DashboardV3Improvement
+		if err := rows.Scan(&item.ID, &item.CandidateType, &item.TargetKey, &item.ExpectedImprovement, &item.RiskSummary, &item.Status, &item.CreatedAt); err != nil {
+			return err
+		}
+		result.Improvements = append(result.Improvements, item)
+	}
+	return rows.Err()
 }
 
 func (s *Store) loadDashboardV3Governance(ctx context.Context, result *DashboardV3, limit int) error {

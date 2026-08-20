@@ -221,14 +221,62 @@ func (s *Store) ProposeProjectMemory(ctx context.Context, memory ProjectMemory, 
 		return "", err
 	}
 	source := any(memory.SourceDocumentID)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO project_memories
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var existingID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM project_memories WHERE project_id=$1 AND memory_key=$2`, memory.ProjectID, memory.Key).Scan(&existingID); err == nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO project_memory_revisions(id,project_memory_id,revision,content,status,source_document_id,evidence_json,actor)
+			SELECT $1,pm.id,COALESCE((SELECT max(r.revision)+1 FROM project_memory_revisions r WHERE r.project_memory_id=pm.id),1),pm.content,pm.status,pm.source_document_id,pm.evidence_json,'agent-revision'
+			FROM project_memories pm WHERE pm.id=$2`, uuid.NewString(), existingID); err != nil {
+			return "", err
+		}
+	} else if err != sql.ErrNoRows {
+		return "", err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO project_memories
 		(id,project_id,memory_key,content,status,source_document_id,evidence_json)
 		VALUES ($1,$2,$3,$4,'CANDIDATE',$5,$6)
 		ON CONFLICT (project_id,memory_key) DO UPDATE SET content=EXCLUDED.content,status='CANDIDATE',
 		source_document_id=EXCLUDED.source_document_id,evidence_json=EXCLUDED.evidence_json,
 		approved_by='',approved_at=NULL,updated_at=CURRENT_TIMESTAMP`, memory.ID, memory.ProjectID, memory.Key,
 		memory.Content, source, string(raw))
-	return memory.ID, err
+	if err != nil {
+		return "", err
+	}
+	if existingID != "" {
+		memory.ID = existingID
+	}
+	return memory.ID, tx.Commit()
+}
+
+func (s *Store) SubmitProjectMemoryReview(ctx context.Context, projectID int64, key, actor string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE project_memories pm SET status='REVIEW_REQUIRED',updated_at=CURRENT_TIMESTAMP
+		FROM knowledge_documents kd WHERE pm.source_document_id=kd.id AND kd.status='ACTIVE' AND pm.project_id=$1
+		AND pm.memory_key=$2 AND pm.status='CANDIDATE'`, projectID, key)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO project_memory_revisions(id,project_memory_id,revision,content,status,source_document_id,evidence_json,actor)
+		SELECT $1,pm.id,COALESCE((SELECT max(r.revision)+1 FROM project_memory_revisions r WHERE r.project_memory_id=pm.id),1),pm.content,pm.status,pm.source_document_id,pm.evidence_json,$2
+		FROM project_memories pm WHERE pm.project_id=$3 AND pm.memory_key=$4`, uuid.NewString(), actor, projectID, key); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ReviewProjectMemory(ctx context.Context, projectID int64, key, decision, actor string, expiresAt *time.Time) error {
@@ -239,7 +287,7 @@ func (s *Store) ReviewProjectMemory(ctx context.Context, projectID int64, key, d
 	result, err := s.db.ExecContext(ctx, `UPDATE project_memories SET status=$1,approved_by=$2,
 		approved_at=CURRENT_TIMESTAMP,expires_at=$3,updated_at=CURRENT_TIMESTAMP
 		WHERE project_id=$4 AND memory_key=$5 AND source_document_id IS NOT NULL
-		AND status IN ('CANDIDATE','REVIEW_REQUIRED','ACTIVE')`,
+		AND status='REVIEW_REQUIRED'`,
 		status, actor, expiresAt, projectID, key)
 	if err != nil {
 		return err
@@ -252,6 +300,15 @@ func (s *Store) ReviewProjectMemory(ctx context.Context, projectID int64, key, d
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) ExpireProjectMemories(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE project_memories SET status='EXPIRED',updated_at=CURRENT_TIMESTAMP
+		WHERE status='ACTIVE' AND expires_at IS NOT NULL AND expires_at<=CURRENT_TIMESTAMP`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *Store) ActiveProjectMemories(ctx context.Context, projectID int64) ([]ProjectMemory, error) {
