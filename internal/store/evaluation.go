@@ -5,9 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/evaluation"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
 	"github.com/google/uuid"
 )
 
@@ -25,6 +29,145 @@ type EvaluationCaseRecord struct {
 	Input        json.RawMessage
 	Expectations evaluation.Expectations
 	DataSplit    string
+}
+
+// CaptureHistoricalEvaluationCase freezes approved workflow evidence into a
+// replay case. It never writes to the source workflow and rejects sensitive
+// source content before it can enter evaluation storage.
+func (s *Store) CaptureHistoricalEvaluationCase(ctx context.Context, suiteID, workflowID, caseKey, dataSplit string) (string, error) {
+	var targetAgent, workflowTitle, sourceHash string
+	var projectID, issueIID int64
+	err := s.db.QueryRowContext(ctx, `SELECT es.target_agent_type,w.gitlab_project_id,w.issue_iid,w.issue_title,w.source_hash
+		FROM evaluation_suites es CROSS JOIN workflows w WHERE es.id=$1 AND w.id=$2 AND es.status='ACTIVE'`,
+		suiteID, workflowID).Scan(&targetAgent, &projectID, &issueIID, &workflowTitle, &sourceHash)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	type sourceEvidence struct {
+		PageID      string `json:"page_id"`
+		Version     int    `json:"version"`
+		Title       string `json:"title"`
+		URL         string `json:"url"`
+		ContentHash string `json:"content_hash"`
+		Content     string `json:"content"`
+	}
+	sourceRows, err := s.db.QueryContext(ctx, `SELECT DISTINCT ON (confluence_page_id)
+		confluence_page_id,source_version,title,source_url,content_hash,normalized_text
+		FROM source_snapshots WHERE workflow_id=$1 ORDER BY confluence_page_id,source_version DESC,created_at DESC`, workflowID)
+	if err != nil {
+		return "", err
+	}
+	var sources []sourceEvidence
+	var sensitiveScan strings.Builder
+	for sourceRows.Next() {
+		var source sourceEvidence
+		if err := sourceRows.Scan(&source.PageID, &source.Version, &source.Title, &source.URL, &source.ContentHash, &source.Content); err != nil {
+			sourceRows.Close()
+			return "", err
+		}
+		sources = append(sources, source)
+		sensitiveScan.WriteString(source.Content)
+		sensitiveScan.WriteByte('\n')
+	}
+	if err := sourceRows.Close(); err != nil {
+		return "", err
+	}
+	if len(sources) == 0 {
+		return "", errors.New("historical workflow has no authoritative source snapshot")
+	}
+	if err := knowledge.ValidateDocument(sensitiveScan.String()); err != nil {
+		return "", fmt.Errorf("historical evaluation source rejected: %w", err)
+	}
+	targetArtifactType := map[string]string{
+		"REQUIREMENT": "REQUIREMENT_REVIEW", "PRD": "PRD", "TEST": "TEST_PLAN", "ARCHITECTURE": "ARCHITECTURE",
+	}[strings.ToUpper(targetAgent)]
+	if targetArtifactType == "" {
+		return "", fmt.Errorf("historical replay target %s is unsupported", targetAgent)
+	}
+	type artifactEvidence struct {
+		Type       string          `json:"type"`
+		Version    int             `json:"version"`
+		SourceHash string          `json:"source_hash"`
+		Content    json.RawMessage `json:"content"`
+	}
+	artifactRows, err := s.db.QueryContext(ctx, `SELECT DISTINCT ON (a.artifact_type)
+		a.artifact_type,a.artifact_version,a.source_hash,a.content_json
+		FROM artifacts a JOIN gates g ON g.artifact_id=a.id
+		WHERE a.workflow_id=$1 AND g.status='APPROVED'
+		ORDER BY a.artifact_type,a.artifact_version DESC`, workflowID)
+	if err != nil {
+		return "", err
+	}
+	var priorArtifacts []artifactEvidence
+	var golden *artifactEvidence
+	for artifactRows.Next() {
+		var artifact artifactEvidence
+		var content []byte
+		if err := artifactRows.Scan(&artifact.Type, &artifact.Version, &artifact.SourceHash, &content); err != nil {
+			artifactRows.Close()
+			return "", err
+		}
+		artifact.Content = json.RawMessage(content)
+		if artifact.Type == targetArtifactType {
+			copyOfArtifact := artifact
+			golden = &copyOfArtifact
+		} else if historicalArtifactIsPrior(targetArtifactType, artifact.Type) {
+			priorArtifacts = append(priorArtifacts, artifact)
+		}
+	}
+	if err := artifactRows.Close(); err != nil {
+		return "", err
+	}
+	if golden == nil {
+		return "", fmt.Errorf("historical workflow has no approved %s artifact", targetArtifactType)
+	}
+	expectations := historicalExpectations(targetArtifactType, golden.Content)
+	input := map[string]any{
+		"workflow": map[string]any{"id": workflowID, "gitlab_project_id": projectID, "issue_iid": issueIID,
+			"issue_title": workflowTitle, "source_hash": sourceHash},
+		"authoritative_sources": sources, "approved_prior_artifacts": priorArtifacts,
+	}
+	if strings.TrimSpace(caseKey) == "" {
+		caseKey = "workflow-" + workflowID + "-" + strings.ToLower(targetAgent)
+	}
+	return s.UpsertEvaluationCase(ctx, suiteID, EvaluationCaseInput{Key: caseKey, Input: input,
+		Expected: expectations, GoldenEvidence: golden, DataSplit: dataSplit})
+}
+
+func historicalArtifactIsPrior(target, candidate string) bool {
+	order := map[string]int{"REQUIREMENT_REVIEW": 1, "PRD": 2, "TEST_PLAN": 2, "ARCHITECTURE": 3}
+	return order[candidate] > 0 && order[candidate] < order[target]
+}
+
+func historicalExpectations(artifactType string, golden json.RawMessage) evaluation.Expectations {
+	expectations := evaluation.Expectations{ForbidToolRequests: true, ForbidProductionMutation: true}
+	switch artifactType {
+	case "REQUIREMENT_REVIEW":
+		expectations.RequiredFields = []string{"decision", "facts", "acceptance_criteria", "work_items"}
+		expectations.ValidateWorkItemDependencies = true
+	case "PRD":
+		expectations.RequiredFields = []string{"problem", "goal", "functional_requirements", "observability", "rollback"}
+	case "TEST_PLAN":
+		expectations.RequiredFields = []string{"decision", "test_cases", "coverage_matrix"}
+		expectations.RequireAcceptanceTestMapping = true
+		var decoded map[string]any
+		if json.Unmarshal(golden, &decoded) == nil {
+			entries, _ := decoded["coverage_matrix"].([]any)
+			for _, raw := range entries {
+				if entry, ok := raw.(map[string]any); ok {
+					if criterion, ok := entry["acceptance_criterion"].(string); ok {
+						expectations.ExpectedAcceptanceCriteria = append(expectations.ExpectedAcceptanceCriteria, criterion)
+					}
+				}
+			}
+		}
+	case "ARCHITECTURE":
+		expectations.RequiredFields = []string{"decision", "approach", "security", "observability", "rollback", "implementation_units"}
+	}
+	return expectations
 }
 
 func (s *Store) EvaluationCases(ctx context.Context, suiteID string) ([]EvaluationCaseRecord, error) {
@@ -212,12 +355,21 @@ func (s *Store) FinishEvaluationRun(ctx context.Context, runID string, runError 
 }
 
 type EvaluationComparison struct {
-	ID        string             `json:"id"`
-	Decision  string             `json:"decision"`
-	Baseline  map[string]float64 `json:"baseline"`
-	Candidate map[string]float64 `json:"candidate"`
-	Deltas    map[string]float64 `json:"deltas"`
-	Reasons   []string           `json:"reasons"`
+	ID           string                            `json:"id"`
+	Decision     string                            `json:"decision"`
+	Baseline     map[string]float64                `json:"baseline"`
+	Candidate    map[string]float64                `json:"candidate"`
+	Deltas       map[string]float64                `json:"deltas"`
+	Significance map[string]EvaluationSignificance `json:"significance"`
+	Reasons      []string                          `json:"reasons"`
+}
+
+type EvaluationSignificance struct {
+	PairedSamples int     `json:"paired_samples"`
+	MeanDelta     float64 `json:"mean_delta"`
+	Lower95       float64 `json:"lower_95"`
+	Upper95       float64 `json:"upper_95"`
+	Significant   bool    `json:"significant"`
 }
 
 type EvaluationRunSummary struct {
@@ -297,6 +449,43 @@ func (s *Store) CompareEvaluationRuns(ctx context.Context, baselineRunID, candid
 	if len(baseline) == 0 || len(candidate) == 0 {
 		return EvaluationComparison{}, errors.New("completed runs with scores are required")
 	}
+	pairedRows, err := s.db.QueryContext(ctx, `SELECT bs.dimension,cs.score-bs.score
+		FROM evaluation_outputs bo JOIN evaluation_scores bs ON bs.evaluation_output_id=bo.id
+		JOIN evaluation_outputs co ON co.evaluation_case_id=bo.evaluation_case_id AND co.evaluation_run_id=$2
+		JOIN evaluation_scores cs ON cs.evaluation_output_id=co.id AND cs.dimension=bs.dimension
+			AND cs.scorer_key=bs.scorer_key AND cs.scorer_version=bs.scorer_version
+		WHERE bo.evaluation_run_id=$1 ORDER BY bs.dimension,bo.evaluation_case_id`, baselineRunID, candidateRunID)
+	if err != nil {
+		return EvaluationComparison{}, err
+	}
+	pairedDeltas := map[string][]float64{}
+	for pairedRows.Next() {
+		var dimension string
+		var delta float64
+		if err := pairedRows.Scan(&dimension, &delta); err != nil {
+			pairedRows.Close()
+			return EvaluationComparison{}, err
+		}
+		pairedDeltas[dimension] = append(pairedDeltas[dimension], delta)
+	}
+	if err := pairedRows.Close(); err != nil {
+		return EvaluationComparison{}, err
+	}
+	significance := map[string]EvaluationSignificance{}
+	for dimension, values := range pairedDeltas {
+		mean := average(values)
+		margin := float64(0)
+		if len(values) > 1 {
+			variance := float64(0)
+			for _, value := range values {
+				variance += (value - mean) * (value - mean)
+			}
+			variance /= float64(len(values) - 1)
+			margin = 1.96 * math.Sqrt(variance/float64(len(values)))
+		}
+		significance[dimension] = EvaluationSignificance{PairedSamples: len(values), MeanDelta: mean,
+			Lower95: mean - margin, Upper95: mean + margin, Significant: len(values) > 1 && (mean-margin > 0 || mean+margin < 0)}
+	}
 	decision := "PASS"
 	deltas := map[string]float64{}
 	reasons := []string{}
@@ -317,7 +506,8 @@ func (s *Store) CompareEvaluationRuns(ctx context.Context, baselineRunID, candid
 			reasons = append(reasons, "regression exceeds suite allowance: "+dimension)
 		}
 	}
-	comparison := EvaluationComparison{ID: uuid.NewString(), Decision: decision, Baseline: baseline, Candidate: candidate, Deltas: deltas, Reasons: reasons}
+	comparison := EvaluationComparison{ID: uuid.NewString(), Decision: decision, Baseline: baseline, Candidate: candidate,
+		Deltas: deltas, Significance: significance, Reasons: reasons}
 	raw, err := json.Marshal(comparison)
 	if err != nil {
 		return EvaluationComparison{}, err
@@ -330,6 +520,17 @@ func (s *Store) CompareEvaluationRuns(ctx context.Context, baselineRunID, candid
 		return EvaluationComparison{}, err
 	}
 	return comparison, nil
+}
+
+func average(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	total := float64(0)
+	for _, value := range values {
+		total += value
+	}
+	return total / float64(len(values))
 }
 
 func (s *Store) EvaluationCase(ctx context.Context, caseID string) (json.RawMessage, evaluation.Expectations, error) {

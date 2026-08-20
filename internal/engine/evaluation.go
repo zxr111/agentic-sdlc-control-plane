@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/agents"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/evaluation"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 )
@@ -14,6 +16,19 @@ import (
 // shadow mode. It has no path to Workflow, Gate, Outbox, Issue, MR, or deploy
 // mutation methods.
 func (e *Engine) RunPromptEvaluation(ctx context.Context, suiteID, promptVersionID string) (string, error) {
+	return e.runEvaluation(ctx, suiteID, promptVersionID, "")
+}
+
+// RunModelEvaluation replays a fixed Prompt and case snapshot against one
+// governed candidate model. Normal production routing remains unchanged.
+func (e *Engine) RunModelEvaluation(ctx context.Context, suiteID, promptVersionID, modelVersionID string) (string, error) {
+	if modelVersionID == "" {
+		return "", errors.New("model version is required")
+	}
+	return e.runEvaluation(ctx, suiteID, promptVersionID, modelVersionID)
+}
+
+func (e *Engine) runEvaluation(ctx context.Context, suiteID, promptVersionID, modelVersionID string) (string, error) {
 	prompt, err := e.store.PromptRuntime(ctx, promptVersionID)
 	if err != nil {
 		return "", err
@@ -51,25 +66,44 @@ func (e *Engine) RunPromptEvaluation(ctx context.Context, suiteID, promptVersion
 		"candidate_prompt_version_id":   promptVersionID,
 		"candidate_content_schema_hash": prompt.ContentHash,
 		"judge_enabled":                 judgeEnabled,
-		"deterministic_scorer":          "deterministic-contract@v1",
+		"deterministic_scorer":          "deterministic-contract@v2",
 		"preferred_model_key":           preferredModel,
 		"allow_model_fallback":          allowFallback,
 		"active_model_snapshot":         modelSnapshot,
 		"case_count":                    len(cases),
+	}
+	var candidateModelKey string
+	if modelVersionID != "" {
+		candidateModel, modelErr := e.store.EvaluationModel(ctx, modelVersionID)
+		if modelErr != nil {
+			return "", modelErr
+		}
+		candidateModelKey = candidateModel.Key
+		parameters["candidate_model_version_id"] = candidateModel.ID
+		parameters["candidate_model_key"] = candidateModel.Key
+		parameters["candidate_model_fixed"] = true
 	}
 	if judgeEnabled {
 		parameters["judge_prompt_version_id"] = judge.ID
 		parameters["judge_content_schema_hash"] = judgeRuntime.ContentHash
 	}
 	runID, err := e.store.StartEvaluationRun(ctx, store.EvaluationRunInput{
-		SuiteID: suiteID, PromptVersionID: promptVersionID, Shadow: true, Parameters: parameters,
+		SuiteID: suiteID, PromptVersionID: promptVersionID, ModelVersionID: modelVersionID, Shadow: true, Parameters: parameters,
 	})
 	if err != nil {
 		return "", err
 	}
 	for _, testCase := range cases {
 		started := time.Now()
-		output, candidateTrace, runErr := e.agents.GenerateCandidate(ctx, runID, prompt.Content, testCase.Input, prompt.OutputSchema)
+		var output json.RawMessage
+		var candidateTrace agents.Trace
+		var runErr error
+		if modelVersionID != "" {
+			output, candidateTrace, runErr = e.agents.GenerateCandidateWithModel(ctx, runID, prompt.Content,
+				testCase.Input, prompt.OutputSchema, modelVersionID, candidateModelKey)
+		} else {
+			output, candidateTrace, runErr = e.agents.GenerateCandidate(ctx, runID, prompt.Content, testCase.Input, prompt.OutputSchema)
+		}
 		scores := evaluation.DeterministicScores(output, testCase.Expectations)
 		if runErr == nil && judgeEnabled {
 			judgeInput, marshalErr := json.Marshal(map[string]any{"candidate_output": json.RawMessage(output), "expectations": testCase.Expectations})

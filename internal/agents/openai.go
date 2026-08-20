@@ -276,10 +276,21 @@ func (c *Client) GenerateArchitecture(ctx context.Context, workflowID, source, r
 }
 
 func (c *Client) generate(ctx context.Context, workflowID, schemaName, instructions, input string, schema json.RawMessage, result any) (Trace, error) {
+	return c.generateWithModel(ctx, workflowID, schemaName, instructions, input, schema, "", "", result)
+}
+
+func (c *Client) generateWithModel(ctx context.Context, workflowID, schemaName, instructions, input string,
+	schema json.RawMessage, forcedModelID, forcedModelKey string, result any) (Trace, error) {
 	startedAt := time.Now()
 	trace := Trace{}
 	modelKey := c.model
-	if c.router != nil {
+	if forcedModelKey != "" {
+		modelKey = forcedModelKey
+		trace.SelectedModelID = forcedModelID
+		trace.SelectedModelKey = forcedModelKey
+		trace.RouteReason = "evaluation candidate model fixed by immutable run"
+		trace.RiskLevel = schemaRisk(schemaName)
+	} else if c.router != nil {
 		risk := schemaRisk(schemaName)
 		decision, err := routing.Route(c.router.Models, routing.Request{PreferredModelID: c.model, Risk: risk,
 			RequiredCapabilities: []string{"structured_output"}, EstimatedInputTokens: int64(len(strings.Fields(instructions + " " + input))),
@@ -417,6 +428,16 @@ func (c *Client) GenerateCandidate(ctx context.Context, evaluationRunID, prompt 
 	schema json.RawMessage) (json.RawMessage, Trace, error) {
 	var output json.RawMessage
 	trace, err := c.generate(ctx, evaluationRunID, "evaluation_candidate_v1", prompt, string(input), schema, &output)
+	return output, trace, err
+}
+
+// GenerateCandidateWithModel fixes the evaluated candidate model for an
+// isolated replay. It bypasses normal active routing only for this shadow run.
+func (c *Client) GenerateCandidateWithModel(ctx context.Context, evaluationRunID, prompt string, input json.RawMessage,
+	schema json.RawMessage, modelVersionID, modelKey string) (json.RawMessage, Trace, error) {
+	var output json.RawMessage
+	trace, err := c.generateWithModel(ctx, evaluationRunID, "evaluation_candidate_v1", prompt, string(input), schema,
+		modelVersionID, modelKey, &output)
 	return output, trace, err
 }
 

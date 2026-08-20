@@ -82,3 +82,28 @@ func TestGenerateUsesControlledModelRoute(t *testing.T) {
 		t.Fatalf("route trace missing %#v", trace)
 	}
 }
+
+func TestEvaluationCandidateFixesGovernedModel(t *testing.T) {
+	client := New("https://api.example.test", "key", "active-model")
+	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		if body["model"] != "candidate-model" {
+			t.Fatalf("candidate model was not fixed: %v", body["model"])
+		}
+		response := `{"id":"resp_candidate","model":"provider-candidate-id","status":"completed","usage":{},
+			"output":[{"type":"message","content":[{"type":"output_text","text":"{\"ok\":true}"}]}]}`
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
+	})
+	output, trace, err := client.GenerateCandidateWithModel(context.Background(), "evaluation-run", "prompt",
+		json.RawMessage(`{"input":"fixed"}`), json.RawMessage(`{"type":"object"}`), "model-version-id", "candidate-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(output), `"ok":true`) || trace.SelectedModelID != "model-version-id" ||
+		trace.SelectedModelKey != "candidate-model" || trace.ProviderModelID != "provider-candidate-id" || trace.Fallback {
+		t.Fatalf("output=%s trace=%#v", output, trace)
+	}
+}

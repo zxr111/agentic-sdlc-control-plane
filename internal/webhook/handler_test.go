@@ -116,3 +116,26 @@ func TestDeliveryCallbackCarriesProductionMigrationEvidence(t *testing.T) {
 		t.Fatalf("migration evidence was not preserved: %#v", callback)
 	}
 }
+
+func TestPushWebhookPreservesRepositoryKnowledgeChanges(t *testing.T) {
+	store := &fakeStore{}
+	handler := New("secret", map[int64]domain.ProjectConfig{1: {GitLabProjectID: 1}}, store,
+		slog.New(slog.NewTextHandler(io.Discard, nil))).Routes()
+	body := `{"object_kind":"push","project":{"id":1},"ref":"refs/heads/main",` +
+		`"after":"0123456789012345678901234567890123456789","commits":[` +
+		`{"added":["docs/design.md"],"modified":["README.md"],"removed":["docs/old.md"]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/webhooks/gitlab", strings.NewReader(body))
+	request.Header.Set("X-Gitlab-Token", "secret")
+	request.Header.Set("X-Gitlab-Event", "Push Hook")
+	request.Header.Set("X-Gitlab-Event-UUID", "event-push")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	event, ok := store.payload.(LifecycleEvent)
+	if response.Code != http.StatusAccepted || store.kind != "gitlab.lifecycle" || !ok {
+		t.Fatalf("status=%d kind=%s payload=%T", response.Code, store.kind, store.payload)
+	}
+	if event.SourceBranch != "refs/heads/main" || event.SHA == "" || len(event.AddedPaths) != 1 ||
+		len(event.ModifiedPaths) != 1 || len(event.RemovedPaths) != 1 {
+		t.Fatalf("push evidence was not preserved: %#v", event)
+	}
+}

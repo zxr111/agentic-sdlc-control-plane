@@ -61,7 +61,14 @@ func (h *Handler) Routes() http.Handler {
 type gitLabEnvelope struct {
 	ObjectKind string `json:"object_kind"`
 	EventType  string `json:"event_type"`
-	Project    struct {
+	Ref        string `json:"ref"`
+	After      string `json:"after"`
+	Commits    []struct {
+		Added    []string `json:"added"`
+		Modified []string `json:"modified"`
+		Removed  []string `json:"removed"`
+	} `json:"commits"`
+	Project struct {
 		ID int64 `json:"id"`
 	} `json:"project"`
 	User struct {
@@ -133,21 +140,24 @@ type ControlNote struct {
 var emailRelayMarker = regexp.MustCompile(`<!-- ai-factory:email-relay:([a-f0-9]{64}) -->`)
 
 type LifecycleEvent struct {
-	ProjectID       int64  `json:"project_id"`
-	ObjectKind      string `json:"object_kind"`
-	ObjectID        int64  `json:"object_id"`
-	IssueIID        int64  `json:"issue_iid"`
-	MergeRequestIID int64  `json:"merge_request_iid"`
-	Action          string `json:"action"`
-	State           string `json:"state"`
-	Status          string `json:"status"`
-	SourceBranch    string `json:"source_branch"`
-	TargetBranch    string `json:"target_branch"`
-	SHA             string `json:"sha"`
-	URL             string `json:"url"`
-	UserID          int64  `json:"user_id"`
-	Username        string `json:"username"`
-	EventID         string `json:"event_id"`
+	ProjectID       int64    `json:"project_id"`
+	ObjectKind      string   `json:"object_kind"`
+	ObjectID        int64    `json:"object_id"`
+	IssueIID        int64    `json:"issue_iid"`
+	MergeRequestIID int64    `json:"merge_request_iid"`
+	Action          string   `json:"action"`
+	State           string   `json:"state"`
+	Status          string   `json:"status"`
+	SourceBranch    string   `json:"source_branch"`
+	TargetBranch    string   `json:"target_branch"`
+	SHA             string   `json:"sha"`
+	URL             string   `json:"url"`
+	UserID          int64    `json:"user_id"`
+	Username        string   `json:"username"`
+	EventID         string   `json:"event_id"`
+	AddedPaths      []string `json:"added_paths,omitempty"`
+	ModifiedPaths   []string `json:"modified_paths,omitempty"`
+	RemovedPaths    []string `json:"removed_paths,omitempty"`
 }
 
 type ExternalCallback struct {
@@ -259,10 +269,21 @@ func (h *Handler) gitLab(writer http.ResponseWriter, request *http.Request) {
 			UserID: envelope.User.ID, Username: envelope.User.Username, EventID: eventID,
 		}
 		if lifecycle.SourceBranch == "" {
+			lifecycle.SourceBranch = envelope.Ref
+		}
+		if lifecycle.SourceBranch == "" {
 			lifecycle.SourceBranch = envelope.ObjectAttributes.Ref
 		}
 		if lifecycle.SHA == "" {
+			lifecycle.SHA = envelope.After
+		}
+		if lifecycle.SHA == "" {
 			lifecycle.SHA = envelope.ObjectAttributes.SHA
+		}
+		for _, commit := range envelope.Commits {
+			lifecycle.AddedPaths = append(lifecycle.AddedPaths, commit.Added...)
+			lifecycle.ModifiedPaths = append(lifecycle.ModifiedPaths, commit.Modified...)
+			lifecycle.RemovedPaths = append(lifecycle.RemovedPaths, commit.Removed...)
 		}
 		err = h.store.EnqueueEvent(request.Context(), "gitlab:"+eventID, "gitlab.lifecycle", lifecycle, time.Now().UTC())
 	}

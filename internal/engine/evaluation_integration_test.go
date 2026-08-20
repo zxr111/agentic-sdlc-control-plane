@@ -58,9 +58,16 @@ func TestPromptEvaluationReplayIsShadowOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	var candidateModelObserved atomic.Bool
+	candidateModelKey := "eval-candidate-" + prompt.ID
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var requestBody map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&requestBody)
+		if requestBody["model"] == candidateModelKey {
+			candidateModelObserved.Store(true)
+		}
 		response.Header().Set("Content-Type", "application/json")
-		if calls.Add(1) == 1 {
+		if calls.Add(1)%2 == 1 {
 			_, _ = io.WriteString(response, `{"id":"resp_eval","status":"completed","usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":1}},"output":[{"type":"message","content":[{"type":"output_text","text":"{\"decision\":\"ready\",\"facts\":[\"synthetic\"]}"}]}]}`)
 			return
 		}
@@ -79,5 +86,21 @@ func TestPromptEvaluationReplayIsShadowOnly(t *testing.T) {
 	if summary.Status != "COMPLETED" || !summary.Shadow || summary.Outputs != 1 || summary.Scores != 6 || calls.Load() != 2 ||
 		summary.ProviderOutputs != 1 || summary.InputTokens != 10 || summary.OutputTokens != 5 {
 		t.Fatalf("unexpected replay summary %#v", summary)
+	}
+	candidateModelID, err := repository.RegisterModelCandidate(ctx, "openai", candidateModelKey,
+		map[string]bool{"structured_output": true, "reasoning": true}, 10, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelRunID, err := runner.RunModelEvaluation(ctx, suiteID, prompt.ID, candidateModelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelSummary, err := repository.EvaluationRunSummary(ctx, modelRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelSummary.Status != "COMPLETED" || !modelSummary.Shadow || !candidateModelObserved.Load() || calls.Load() != 4 {
+		t.Fatalf("candidate model was not replayed summary=%#v calls=%d observed=%t", modelSummary, calls.Load(), candidateModelObserved.Load())
 	}
 }

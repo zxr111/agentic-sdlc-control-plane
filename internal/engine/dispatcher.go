@@ -28,6 +28,7 @@ type GenerateArchitectureEvent struct {
 type EvaluationRunEvent struct {
 	SuiteID         string `json:"suite_id"`
 	PromptVersionID string `json:"prompt_version_id"`
+	ModelVersionID  string `json:"model_version_id,omitempty"`
 }
 
 func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error {
@@ -82,7 +83,12 @@ func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return err
 		}
-		_, err := e.RunPromptEvaluation(ctx, payload.SuiteID, payload.PromptVersionID)
+		var err error
+		if payload.ModelVersionID != "" {
+			_, err = e.RunModelEvaluation(ctx, payload.SuiteID, payload.PromptVersionID, payload.ModelVersionID)
+		} else {
+			_, err = e.RunPromptEvaluation(ctx, payload.SuiteID, payload.PromptVersionID)
+		}
 		return err
 	case "external.delivery":
 		var payload webhook.ExternalCallback

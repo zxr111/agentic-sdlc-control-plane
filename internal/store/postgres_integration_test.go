@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +21,91 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/multiagent"
 	"github.com/google/uuid"
 )
+
+func TestMigrationsSupportEmptyAndV2Databases(t *testing.T) {
+	baseURL := os.Getenv("DATABASE_TEST_URL")
+	if baseURL == "" {
+		t.Skip("DATABASE_TEST_URL is not configured")
+	}
+	admin, err := Open(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for _, scenario := range []struct {
+		name      string
+		v2Fixture bool
+	}{{name: "empty"}, {name: "v2", v2Fixture: true}} {
+		t.Run(scenario.name, func(t *testing.T) {
+			databaseName := "factory_migration_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+			if _, err := admin.db.ExecContext(ctx, "CREATE DATABASE "+databaseName); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_, _ = admin.db.ExecContext(context.Background(), "DROP DATABASE "+databaseName+" WITH (FORCE)")
+			})
+			targetURL, err := url.Parse(baseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			targetURL.Path = "/" + databaseName
+			target, err := Open(targetURL.String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer target.Close()
+			if scenario.v2Fixture {
+				for _, version := range []string{"001_initial", "002_full_lifecycle"} {
+					content, err := migrationFiles.ReadFile("migrations/" + version + ".sql")
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, statement := range splitStatements(string(content)) {
+						if _, err := target.db.ExecContext(ctx, statement); err != nil {
+							t.Fatalf("apply V2 fixture %s: %v", version, err)
+						}
+					}
+					if _, err := target.db.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT DO NOTHING`, version); err != nil {
+						t.Fatal(err)
+					}
+				}
+				workflowID := uuid.NewString()
+				if _, err := target.db.ExecContext(ctx, `INSERT INTO workflows(id,gitlab_project_id,issue_iid,issue_title,state)
+					VALUES($1,42,7,'V2 fixture','NEW')`, workflowID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := target.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var migrationCount int
+			if err := target.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
+				t.Fatal(err)
+			}
+			if migrationCount < 11 {
+				t.Fatalf("expected all migrations, got %d", migrationCount)
+			}
+			if scenario.v2Fixture {
+				var title string
+				if err := target.db.QueryRowContext(ctx, `SELECT issue_title FROM workflows WHERE gitlab_project_id=42 AND issue_iid=7`).Scan(&title); err != nil {
+					t.Fatal(err)
+				}
+				if title != "V2 fixture" {
+					t.Fatalf("V2 data changed: %s", title)
+				}
+			}
+			var vectorExtension bool
+			if err := target.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')`).Scan(&vectorExtension); err != nil {
+				t.Fatal(err)
+			}
+			if !vectorExtension {
+				t.Fatal(fmt.Errorf("vector extension was not installed"))
+			}
+		})
+	}
+}
 
 func integrationStore(t *testing.T) *Store {
 	t.Helper()
@@ -1037,6 +1124,9 @@ func TestV3EvaluationRunIsIsolatedAndComparable(t *testing.T) {
 	if err != nil || comparison.Decision != "REVIEW" {
 		t.Fatalf("regression was not held for review comparison=%#v err=%v", comparison, err)
 	}
+	if comparison.Significance["minimum_items"].PairedSamples != 1 || comparison.Deltas["minimum_items"] >= 0 {
+		t.Fatalf("paired comparison evidence missing: %#v", comparison)
+	}
 	var workflowWrites int
 	if err := repository.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE event_type LIKE 'evaluation.%'`).Scan(&workflowWrites); err != nil {
 		t.Fatal(err)
@@ -1047,5 +1137,48 @@ func TestV3EvaluationRunIsIsolatedAndComparable(t *testing.T) {
 	ids, err := repository.ProposeEvaluationImprovements(ctx, candidateID, 1)
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("holdout findings leaked into automatic improvements ids=%v err=%v", ids, err)
+	}
+}
+
+func TestCaptureHistoricalEvaluationCaseFreezesApprovedWorkflow(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(810000+time.Now().UnixNano()%100000, 17, "Historical replay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := domain.Snapshot{ID: uuid.NewString(), WorkflowID: workflow.ID, ConfluencePageID: "history-page",
+		Version: 3, Title: "Approved requirements", URL: "https://example.invalid/history-page",
+		ContentHash: strings.Repeat("a", 64), NormalizedText: "Users can export an auditable report.", RawStorage: "<p>Users can export an auditable report.</p>"}
+	if err := repository.SaveSnapshot(ctx, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	artifactID := uuid.NewString()
+	artifactContent := `{"decision":"ready","facts":["export required"],"acceptance_criteria":[{"id":"AC-1","behavior":"export","evidence":"report"}],"work_items":[{"key":"API","dependencies":[]}]}`
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO artifacts
+		(id,workflow_id,artifact_type,artifact_version,source_hash,content_json,markdown,model,prompt_version)
+		VALUES($1,$2,'REQUIREMENT_REVIEW',1,$3,$4,'approved','model','prompt')`, artifactID, workflow.ID, strings.Repeat("b", 64), artifactContent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO gates
+		(id,workflow_id,gate_type,status,artifact_id,revision,reviewer_ids,opened_at,decided_at,decision_actor,feedback)
+		VALUES($1,$2,'REQUIREMENT','APPROVED',$3,1,'[7]',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,7,'')`, uuid.NewString(), workflow.ID, artifactID); err != nil {
+		t.Fatal(err)
+	}
+	suiteID, err := repository.EnsureEvaluationSuite(ctx, "historical-"+workflow.ID, "REQUIREMENT", map[string]any{"minimum": 0.8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caseID, err := repository.CaptureHistoricalEvaluationCase(ctx, suiteID, workflow.ID, "", "VALIDATION")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, expectations, err := repository.EvaluationCase(ctx, caseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(input), "history-page") || !strings.Contains(string(input), "auditable report") ||
+		!expectations.ValidateWorkItemDependencies || !expectations.ForbidToolRequests || !expectations.ForbidProductionMutation {
+		t.Fatalf("historical case was incomplete input=%s expectations=%#v", input, expectations)
 	}
 }

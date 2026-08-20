@@ -103,6 +103,35 @@ func (c *Client) GetMergeRequest(ctx context.Context, projectID, mergeRequestIID
 	return result, err
 }
 
+func (c *Client) GetRepositoryFile(ctx context.Context, projectID int64, filePath, ref string) ([]byte, error) {
+	query := url.Values{}
+	query.Set("ref", ref)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/projects/%d/repository/files/%s/raw?%s", c.baseURL, projectID, url.PathEscape(filePath), query.Encode()), nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("PRIVATE-TOKEN", c.token)
+	request.Header.Set("Accept", "text/plain, application/octet-stream")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("gitlab repository file failed: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, responseError("gitlab repository file", response)
+	}
+	const maximumRepositoryFileBytes = 1 << 20
+	content, err := io.ReadAll(io.LimitReader(response.Body, maximumRepositoryFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > maximumRepositoryFileBytes {
+		return nil, errors.New("gitlab repository file exceeds 1 MiB limit")
+	}
+	return content, nil
+}
+
 func (c *Client) EnsureBranch(ctx context.Context, projectID int64, branch, ref string) error {
 	var existing struct {
 		Name string `json:"name"`

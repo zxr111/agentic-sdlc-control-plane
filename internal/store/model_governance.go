@@ -26,6 +26,34 @@ func (s *Store) RegisterModelCandidate(ctx context.Context, providerKey, modelKe
 	return id, err
 }
 
+func (s *Store) EvaluationModel(ctx context.Context, modelVersionID string) (routing.Model, error) {
+	var model routing.Model
+	var capabilities []byte
+	var status string
+	err := s.db.QueryRowContext(ctx, `SELECT mv.id::text,mv.model_key,mv.capabilities,
+		mv.input_cost_microunits,mv.output_cost_microunits,mv.status,
+		COALESCE((SELECT healthy FROM model_health_events mh WHERE mh.model_version_id=mv.id ORDER BY observed_at DESC LIMIT 1),true)
+		FROM model_versions mv WHERE mv.id=$1`, modelVersionID).Scan(&model.ID, &model.Key, &capabilities,
+		&model.InputCost, &model.OutputCost, &status, &model.Healthy)
+	if err == sql.ErrNoRows {
+		return routing.Model{}, ErrNotFound
+	}
+	if err != nil {
+		return routing.Model{}, err
+	}
+	if status != "CANDIDATE" && status != "ACTIVE" {
+		return routing.Model{}, ErrGovernanceRequired
+	}
+	if err := json.Unmarshal(capabilities, &model.Capabilities); err != nil {
+		return routing.Model{}, err
+	}
+	if !model.Healthy || !model.Capabilities["structured_output"] {
+		return routing.Model{}, ErrGovernanceRequired
+	}
+	model.Active = status == "ACTIVE"
+	return model, nil
+}
+
 func (s *Store) PromoteModelVersion(ctx context.Context, modelVersionID, evaluationRunID, blindReviewID, canaryID, actor string) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {

@@ -8,6 +8,24 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
 )
 
+func TestRepositoryKnowledgePathAllowlist(t *testing.T) {
+	allowed := []string{"README.md", "docs/design.md", "service/docs/runbook.adoc", "openapi.yaml", "db/migrations/001.sql"}
+	for _, path := range allowed {
+		if !isRepositoryKnowledgePath(path) {
+			t.Fatalf("expected %s to be indexed", path)
+		}
+	}
+	for _, path := range []string{"cmd/server/main.go", ".env", "secrets.txt", "assets/logo.png"} {
+		if isRepositoryKnowledgePath(path) {
+			t.Fatalf("unexpected repository knowledge path %s", path)
+		}
+	}
+	unique := uniqueKnowledgePaths([]string{"README.md", "README.md", "docs/a.md", "docs/b.md"}, 2)
+	if len(unique) != 2 || unique[0] != "README.md" || unique[1] != "docs/a.md" {
+		t.Fatalf("unexpected bounded paths %#v", unique)
+	}
+}
+
 func TestCombinedHashChangesWithImage(t *testing.T) {
 	first := []domain.Snapshot{{
 		ConfluencePageID: "1", Version: 2, ContentHash: strings.Repeat("a", 64),

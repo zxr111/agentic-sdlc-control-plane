@@ -25,3 +25,35 @@ func TestInvalidJSONStopsScoring(t *testing.T) {
 		t.Fatalf("unexpected scores %#v", scores)
 	}
 }
+
+func TestDeterministicScoresGovernDeliveryStructure(t *testing.T) {
+	expectations := Expectations{
+		ExpectedAcceptanceCriteria: []string{"AC-1", "AC-2"}, RequireAcceptanceTestMapping: true,
+		ValidateWorkItemDependencies: true, ForbidToolRequests: true, ForbidProductionMutation: true,
+	}
+	passing := json.RawMessage(`{
+		"coverage_matrix":[{"acceptance_criterion":"AC-1","test_cases":["T-1"]},{"acceptance_criterion":"AC-2","test_cases":["T-2"]}],
+		"work_items":[{"key":"A","dependencies":[]},{"key":"B","dependencies":["A"]}]
+	}`)
+	for _, score := range DeterministicScores(passing, expectations) {
+		if score.Value != 1 {
+			t.Fatalf("passing output failed %s: %#v", score.Dimension, score.Evidence)
+		}
+	}
+	failing := json.RawMessage(`{
+		"coverage_matrix":[{"acceptance_criterion":"AC-1","test_cases":[]}],
+		"work_items":[{"key":"A","dependencies":["B"]},{"key":"B","dependencies":["A"]}],
+		"tool_requests":[{"tool":"production.deploy","environment":"production"}]
+	}`)
+	failed := map[string]bool{}
+	for _, score := range DeterministicScores(failing, expectations) {
+		if score.Value == 0 {
+			failed[score.Dimension] = true
+		}
+	}
+	for _, dimension := range []string{"acceptance_test_mapping", "work_item_dependencies", "unauthorized_tool_requests", "production_lock"} {
+		if !failed[dimension] {
+			t.Fatalf("expected deterministic failure for %s", dimension)
+		}
+	}
+}
