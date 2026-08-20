@@ -119,9 +119,9 @@ func (s *Store) IngestKnowledge(ctx context.Context, source KnowledgeSource) (st
 	}
 	for _, chunk := range knowledge.ChunkText(source.Content, source.ParentPath, 400, 50) {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_chunks
-			(id,knowledge_version_id,chunk_index,parent_path,content,token_count,content_hash)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)`, uuid.NewString(), versionID, chunk.Index, chunk.ParentPath,
-			chunk.Content, chunk.TokenCount, chunk.Hash); err != nil {
+			(id,knowledge_version_id,chunk_index,parent_path,content,token_count,content_hash,embedding)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8::vector)`, uuid.NewString(), versionID, chunk.Index, chunk.ParentPath,
+			chunk.Content, chunk.TokenCount, chunk.Hash, knowledge.VectorLiteral(knowledge.EmbedText(chunk.Content))); err != nil {
 			return "", false, err
 		}
 	}
@@ -138,15 +138,31 @@ func (s *Store) SearchKnowledge(ctx context.Context, projectID int64, query stri
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT kc.id,kd.id,kd.source_type,kd.source_key,kv.source_version,
-		kd.title,kc.parent_path,kc.content,kc.content_hash,kd.authority_level,
-		ts_rank_cd(kc.search_vector,plainto_tsquery('simple',$2)) AS lexical_score
+	embedding := knowledge.VectorLiteral(knowledge.EmbedText(query))
+	rows, err := s.db.QueryContext(ctx, `WITH candidates AS (
+		SELECT kc.*,kd.id document_id,kd.source_type,kd.source_key,kd.title,kd.authority_level,kv.source_version,kv.fetched_at
 		FROM knowledge_chunks kc JOIN knowledge_versions kv ON kv.id=kc.knowledge_version_id
 		JOIN knowledge_documents kd ON kd.id=kv.document_id
 		WHERE kd.project_id=$1 AND kd.status='ACTIVE' AND kv.status='ACTIVE' AND kd.authority_level >= $3
-		AND kc.search_vector @@ plainto_tsquery('simple',$2)
-		ORDER BY kd.authority_level DESC,lexical_score DESC,kv.fetched_at DESC LIMIT $4`,
-		projectID, query, minimumAuthority, limit)
+	), lexical AS (
+		SELECT id,ts_rank_cd(search_vector,plainto_tsquery('simple',$2)) score,
+		row_number() OVER (ORDER BY ts_rank_cd(search_vector,plainto_tsquery('simple',$2)) DESC) rank
+		FROM candidates WHERE search_vector @@ plainto_tsquery('simple',$2) LIMIT $4
+	), semantic AS (
+		SELECT id,1-(embedding <=> $5::vector) score,
+		row_number() OVER (ORDER BY embedding <=> $5::vector) rank
+		FROM candidates WHERE embedding IS NOT NULL LIMIT $4
+	), fused AS (
+		SELECT id,sum(rrf) score,max(lexical_score) lexical_score,max(vector_score) vector_score FROM (
+			SELECT id,1.0/(60+rank) rrf,score lexical_score,0::double precision vector_score FROM lexical
+			UNION ALL SELECT id,1.0/(60+rank),0,score FROM semantic
+		) ranked GROUP BY id
+	)
+	SELECT c.id,c.document_id,c.source_type,c.source_key,c.source_version,c.title,c.parent_path,c.content,
+		c.content_hash,c.authority_level,f.lexical_score,f.vector_score,f.score
+	FROM fused f JOIN candidates c ON c.id=f.id
+	ORDER BY c.authority_level DESC,f.score DESC,c.fetched_at DESC LIMIT $4`,
+		projectID, query, minimumAuthority, limit, embedding)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +171,8 @@ func (s *Store) SearchKnowledge(ctx context.Context, projectID int64, query stri
 	for rows.Next() {
 		var hit KnowledgeHit
 		if err := rows.Scan(&hit.ChunkID, &hit.DocumentID, &hit.SourceType, &hit.SourceKey, &hit.SourceVersion,
-			&hit.Title, &hit.ParentPath, &hit.Content, &hit.ContentHash, &hit.AuthorityLevel, &hit.LexicalScore); err != nil {
+			&hit.Title, &hit.ParentPath, &hit.Content, &hit.ContentHash, &hit.AuthorityLevel, &hit.LexicalScore,
+			&hit.VectorScore, &hit.RerankScore); err != nil {
 			return nil, err
 		}
 		hits = append(hits, hit)
