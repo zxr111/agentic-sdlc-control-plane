@@ -62,6 +62,15 @@ func (s *Store) ValidateKnowledgeHits(ctx context.Context, hits []KnowledgeHit) 
 // RetrieveKnowledge performs a bounded project-scoped retrieval and records
 // every selected result so the exact RAG evidence can be replayed later.
 func (s *Store) RetrieveKnowledge(ctx context.Context, workflowID string, projectID int64, query string, minimumAuthority, limit int) ([]KnowledgeHit, error) {
+	return s.retrieveKnowledge(ctx, workflowID, "", projectID, query, minimumAuthority, limit)
+}
+
+func (s *Store) RetrieveKnowledgeForAgentRun(ctx context.Context, workflowID, agentRunID string, projectID int64,
+	query string, minimumAuthority, limit int) ([]KnowledgeHit, error) {
+	return s.retrieveKnowledge(ctx, workflowID, agentRunID, projectID, query, minimumAuthority, limit)
+}
+
+func (s *Store) retrieveKnowledge(ctx context.Context, workflowID, agentRunID string, projectID int64, query string, minimumAuthority, limit int) ([]KnowledgeHit, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
@@ -83,9 +92,9 @@ func (s *Store) RetrieveKnowledge(ctx context.Context, workflowID string, projec
 			parent = parentID
 		}
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO retrieval_runs
-			(id,workflow_id,query_text,filters_json,strategy,iteration,parent_run_id,rewritten_from)
-			VALUES ($1,$2,$3,$4,'HYBRID_RRF_AGENTIC_V1',$5,$6,$7)`, runID, workflowID, currentQuery,
-			string(filters), index+1, parent, query); err != nil {
+			(id,workflow_id,agent_run_id,query_text,filters_json,strategy,iteration,parent_run_id,rewritten_from)
+			VALUES ($1,$2,$3,$4,$5,'HYBRID_RRF_AGENTIC_V1',$6,$7,$8)`, runID, workflowID,
+			nullableUUID(agentRunID), currentQuery, string(filters), index+1, parent, query); err != nil {
 			return nil, err
 		}
 		hits, err := s.SearchKnowledge(ctx, projectID, currentQuery, minimumAuthority, limit*2)
@@ -164,6 +173,14 @@ func (s *Store) RetrieveKnowledge(ctx context.Context, workflowID string, projec
 		return nil, err
 	}
 	return hits, nil
+}
+
+func (s *Store) AgentRunToolEvidence(ctx context.Context, agentRunID string) (toolCalls, retrievalRuns int, err error) {
+	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM tool_calls WHERE agent_run_id=$1`, agentRunID).Scan(&toolCalls); err != nil {
+		return 0, 0, err
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM retrieval_runs WHERE agent_run_id=$1`, agentRunID).Scan(&retrievalRuns)
+	return toolCalls, retrievalRuns, err
 }
 
 func (s *Store) IngestKnowledge(ctx context.Context, source KnowledgeSource) (string, bool, error) {

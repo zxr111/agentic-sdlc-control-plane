@@ -32,6 +32,7 @@ type Request struct {
 	Actor            string
 	EvidenceVersion  int
 	BudgetMicrounits int64
+	AgenticRetrieval bool
 }
 
 type knowledgeSearchInput struct {
@@ -81,7 +82,14 @@ func (g Gateway) Execute(ctx context.Context, request Request) (json.RawMessage,
 		if input.Query == "" || len(input.Query) > 1000 {
 			return nil, g.fail(ctx, authorization.CallID, errors.New("query is required and must not exceed 1000 bytes"))
 		}
-		hits, err := g.Store.SearchKnowledge(ctx, request.ProjectID, input.Query, input.MinimumAuthority, input.Limit)
+		var hits []store.KnowledgeHit
+		var err error
+		if request.AgenticRetrieval {
+			hits, err = g.Store.RetrieveKnowledgeForAgentRun(ctx, authorization.WorkflowID, request.AgentRunID,
+				authorization.ProjectID, input.Query, input.MinimumAuthority, input.Limit)
+		} else {
+			hits, err = g.Store.SearchKnowledge(ctx, authorization.ProjectID, input.Query, input.MinimumAuthority, input.Limit)
+		}
 		if err != nil {
 			return nil, g.fail(ctx, authorization.CallID, err)
 		}

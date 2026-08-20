@@ -21,6 +21,7 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/multiagent"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/toolgateway"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/webhook"
 	"github.com/google/uuid"
 )
@@ -32,6 +33,7 @@ const (
 	MessageEnsureBranch    = "gitlab.ensure_branch"
 	MessageCreateMR        = "gitlab.create_merge_request"
 	MessageTriggerDelivery = "delivery.trigger"
+	MessageProposeMemory   = "factory.propose_memory"
 )
 
 type Engine struct {
@@ -110,6 +112,14 @@ type DeliveryRequestPayload struct {
 	Environment string `json:"environment,omitempty"`
 }
 
+type ProposeMemoryPayload struct {
+	ProjectID        int64  `json:"project_id"`
+	Key              string `json:"key"`
+	Content          string `json:"content"`
+	SourceDocumentID string `json:"source_document_id"`
+	ToolCallID       string `json:"tool_call_id"`
+}
+
 func (e *Engine) DeliverOutbox(ctx context.Context, message domain.OutboxMessage) (string, error) {
 	switch message.Type {
 	case MessageUpsertNote:
@@ -181,6 +191,14 @@ func (e *Engine) DeliverOutbox(ctx context.Context, message domain.OutboxMessage
 			return "", errors.New("delivery adapter is not configured")
 		}
 		return e.delivery.Trigger(ctx, payload.RequestID, payload)
+	case MessageProposeMemory:
+		var payload ProposeMemoryPayload
+		if err := json.Unmarshal(message.Payload, &payload); err != nil {
+			return "", err
+		}
+		return e.store.ProposeProjectMemory(ctx, store.ProjectMemory{ProjectID: payload.ProjectID,
+			Key: payload.Key, Content: payload.Content, SourceDocumentID: payload.SourceDocumentID},
+			map[string]any{"tool_call_id": payload.ToolCallID, "delivery": "transactional-outbox"})
 	default:
 		return "", fmt.Errorf("unsupported outbox message type %q", message.Type)
 	}
@@ -219,7 +237,23 @@ func boundedSourceText(snapshots []domain.Snapshot, maxTokensPerSource int) (str
 	return out.String(), transmitted
 }
 
-func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, agentType, inputHash string, snapshots []domain.Snapshot) (string, string, error) {
+func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, agentType, inputHash string, snapshots []domain.Snapshot) (resultRunID, resultContext string, resultErr error) {
+	profileKey := strings.ToLower(agentType)
+	for _, role := range []string{"PRIMARY", "CRITIC", "SECURITY_RELIABILITY", "JUDGE"} {
+		if strings.HasSuffix(agentType, "_"+role) {
+			profileKey = "multiagent_" + strings.ToLower(role)
+			break
+		}
+	}
+	runID, err := e.store.StartAgentRunWithProfile(ctx, workflow.ID, "", agentType, profileKey, e.agents.Model(), inputHash, "")
+	if err != nil {
+		return "", "", err
+	}
+	defer func() {
+		if resultErr != nil {
+			_ = e.store.FinishAgentRun(ctx, runID, "FAILED", "", resultErr)
+		}
+	}()
 	contextText, transmittedSnapshots := boundedSourceText(snapshots, 8000)
 	manifestID := ""
 	if e.v3.ContextManifest {
@@ -240,7 +274,26 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 			})
 		}
 		if e.v3.RAG {
-			hits, err := e.store.RetrieveKnowledge(ctx, workflow.ID, workflow.GitLabProjectID, workflow.IssueTitle, 0, 8)
+			var hits []store.KnowledgeHit
+			if e.v3.ToolGateway {
+				input, marshalErr := json.Marshal(map[string]any{"query": workflow.IssueTitle, "minimum_authority": 0, "limit": 8})
+				if marshalErr != nil {
+					return "", "", marshalErr
+				}
+				output, gatewayErr := (toolgateway.Gateway{Store: e.store}).Execute(ctx, toolgateway.Request{
+					AgentRunID: runID, ToolKey: "knowledge.search", ProjectID: workflow.GitLabProjectID,
+					AgentType: agentType, WorkflowState: string(workflow.State), Input: input,
+					ProductionLock: true, Actor: "context-builder", AgenticRetrieval: true,
+				})
+				if gatewayErr != nil {
+					return "", "", fmt.Errorf("governed knowledge tool: %w", gatewayErr)
+				}
+				if err := json.Unmarshal(output, &hits); err != nil {
+					return "", "", fmt.Errorf("decode governed knowledge tool output: %w", err)
+				}
+			} else {
+				hits, err = e.store.RetrieveKnowledge(ctx, workflow.ID, workflow.GitLabProjectID, workflow.IssueTitle, 0, 8)
+			}
 			if err != nil {
 				return "", "", fmt.Errorf("retrieve governed context: %w", err)
 			}
@@ -298,16 +351,11 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 		if err != nil {
 			return "", "", err
 		}
-	}
-	profileKey := strings.ToLower(agentType)
-	for _, role := range []string{"PRIMARY", "CRITIC", "SECURITY_RELIABILITY", "JUDGE"} {
-		if strings.HasSuffix(agentType, "_"+role) {
-			profileKey = "multiagent_" + strings.ToLower(role)
-			break
+		if err := e.store.BindAgentRunContext(ctx, runID, manifestID); err != nil {
+			return "", "", err
 		}
 	}
-	runID, err := e.store.StartAgentRunWithProfile(ctx, workflow.ID, "", agentType, profileKey, e.agents.Model(), inputHash, manifestID)
-	return runID, contextText, err
+	return runID, contextText, nil
 }
 
 func storeTrace(trace agents.Trace) store.AgentRunTrace {

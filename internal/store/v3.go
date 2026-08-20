@@ -99,3 +99,20 @@ func (s *Store) StartAgentRunWithProfile(ctx context.Context, workflowID, workIt
 	}
 	return id, nil
 }
+
+func (s *Store) BindAgentRunContext(ctx context.Context, agentRunID, manifestID string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE agent_runs ar SET context_manifest_id=$1
+		WHERE ar.id=$2 AND ar.status='RUNNING' AND ar.context_manifest_id IS NULL
+		AND EXISTS(SELECT 1 FROM context_manifests cm WHERE cm.id=$1 AND cm.workflow_id=ar.workflow_id)`, manifestID, agentRunID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrNotFound
+	}
+	return nil
+}

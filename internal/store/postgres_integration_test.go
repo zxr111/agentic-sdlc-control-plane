@@ -84,7 +84,7 @@ func TestMigrationsSupportEmptyAndV2Databases(t *testing.T) {
 			if err := target.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 				t.Fatal(err)
 			}
-			if migrationCount < 11 {
+			if migrationCount < 12 {
 				t.Fatalf("expected all migrations, got %d", migrationCount)
 			}
 			if scenario.v2Fixture {
@@ -638,6 +638,13 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if providerModelID != "test-model-2026-08-01" {
 		t.Fatalf("provider model id=%s", providerModelID)
 	}
+	incompleteRunID, err := repository.StartAgentRunWithContext(ctx, workflow.ID, "", "REQUIREMENT", "test-model", "incomplete", manifestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishAgentRun(ctx, incompleteRunID, "COMPLETED", "", nil); err == nil {
+		t.Fatal("governed Agent Run completed without provider trace evidence")
+	}
 	var required bool
 	var compression string
 	if err := repository.db.QueryRowContext(ctx, `SELECT required,compression_method FROM context_entries WHERE context_manifest_id=$1`, manifestID).Scan(&required, &compression); err != nil || !required || compression != "none" {
@@ -678,7 +685,7 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		t.Fatalf("unlisted skill entered context=%#v err=%v", blockedSkills, err)
 	}
 	allowed, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
-		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State),
 		Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
 	if err != nil || allowed.Decision.Action != "EXECUTE" {
 		t.Fatalf("read tool not authorized %#v err=%v", allowed, err)
@@ -692,19 +699,19 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	denied, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
-		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS", Actor: "agent",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State), Actor: "agent",
 		EvidenceVersion: 1, BudgetMicrounits: 101, Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
 	if err != nil || denied.Decision.Action != "DENY" {
 		t.Fatalf("tool conditions were bypassed %#v err=%v", denied, err)
 	}
 	conditioned, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
-		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS", Actor: "engineer",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State), Actor: "engineer",
 		EvidenceVersion: 2, BudgetMicrounits: 100, Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
 	if err != nil || conditioned.Decision.Action != "EXECUTE" {
 		t.Fatalf("valid tool conditions rejected %#v err=%v", conditioned, err)
 	}
 	comment, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "gitlab.comment",
-		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS", Actor: "agent",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State), Actor: "agent",
 		Input: map[string]any{"marker": "agent-note", "body": "evidence-backed note"}, RedactedInput: map[string]any{"marker": "agent-note", "body": "evidence-backed note"}})
 	if err != nil || comment.Decision.Action != "OUTBOX" {
 		t.Fatalf("comment was not routed through outbox %#v err=%v", comment, err)
@@ -733,10 +740,10 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		t.Fatalf("tool completion status=%s err=%v", toolStatus, err)
 	}
 	gateRequired, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "staging.deploy",
-		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "STAGING",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: string(workflow.State),
 		Input: map[string]any{"sha": "abc"}, RedactedInput: map[string]any{"sha": "abc"}})
-	if err != nil || gateRequired.Decision.Action != "REQUIRE_GATE" {
-		t.Fatalf("staging gate bypass %#v err=%v", gateRequired, err)
+	if err != nil || gateRequired.Decision.Action != "DENY" {
+		t.Fatalf("cross-stage staging tool was not denied %#v err=%v", gateRequired, err)
 	}
 	approvedSHA := "1234567890abcdef1234567890abcdef12345678"
 	artifactID, approvedGateID := uuid.NewString(), uuid.NewString()
@@ -748,8 +755,15 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		VALUES($1,$2,'RELEASE','APPROVED',$3,1,'[]',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1,'approved')`, approvedGateID, workflow.ID, artifactID); err != nil {
 		t.Fatal(err)
 	}
-	deploy, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "staging.deploy",
-		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "STAGING", GateID: approvedGateID, EvidenceVersion: 1,
+	if _, err := repository.db.ExecContext(ctx, `UPDATE workflows SET state='RELEASE_CI_RUNNING' WHERE id=$1`, workflow.ID); err != nil {
+		t.Fatal(err)
+	}
+	releaseRunID, err := repository.StartAgentRun(ctx, workflow.ID, "", "RELEASE", "test-model", "release-tool-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: releaseRunID, ToolKey: "staging.deploy",
+		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "RELEASE_CI_RUNNING", GateID: approvedGateID, EvidenceVersion: 1,
 		Input: map[string]any{"commit_sha": approvedSHA}, RedactedInput: map[string]any{"commit_sha": approvedSHA}})
 	if err != nil || deploy.Decision.Action != "OUTBOX" {
 		t.Fatalf("approved staging deploy not routed through outbox %#v err=%v", deploy, err)
@@ -763,8 +777,8 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		"tool-call:"+deploy.CallID).Scan(&deployQueued); err != nil || deployQueued != 1 {
 		t.Fatalf("deploy outbox count=%d err=%v", deployQueued, err)
 	}
-	production, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "production.deploy",
-		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "RELEASE",
+	production, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: releaseRunID, ToolKey: "production.deploy",
+		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "RELEASE_CI_RUNNING",
 		Input: map[string]any{}, RedactedInput: map[string]any{}, ProductionLock: false})
 	if err != nil || production.Decision.Action != "DENY" {
 		t.Fatalf("production lock bypass %#v err=%v", production, err)
@@ -1037,7 +1051,7 @@ func TestV3ImprovementCandidatesRequireEvidenceAndHumanReview(t *testing.T) {
 func TestOperationalFailuresCreateReviewOnlyImprovementClusters(t *testing.T) {
 	repository := integrationStore(t)
 	ctx := context.Background()
-	projectID := int64(920000 + time.Now().UnixNano()%10000)
+	projectID := time.Now().UnixNano()
 	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(projectID, 33, "Operational learning"))
 	if err != nil {
 		t.Fatal(err)
@@ -1218,7 +1232,7 @@ func TestV3EvaluationRunIsIsolatedAndComparable(t *testing.T) {
 func TestCaptureHistoricalEvaluationCaseFreezesApprovedWorkflow(t *testing.T) {
 	repository := integrationStore(t)
 	ctx := context.Background()
-	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(810000+time.Now().UnixNano()%100000, 17, "Historical replay"))
+	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(time.Now().UnixNano(), 17, "Historical replay"))
 	if err != nil {
 		t.Fatal(err)
 	}

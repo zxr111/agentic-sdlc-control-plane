@@ -123,6 +123,18 @@ func TestV3AgenticRetrievalMigration(t *testing.T) {
 	}
 }
 
+func TestV3ToolRetrievalTraceMigrationBindsAgentRun(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/012_v3_tool_retrieval_trace.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	if !strings.Contains(source, "retrieval_runs ADD COLUMN IF NOT EXISTS agent_run_id") ||
+		!strings.Contains(source, "idx_retrieval_runs_agent_run") {
+		t.Fatal("tool retrieval trace migration does not bind retrieval evidence to Agent Run")
+	}
+}
+
 func TestRetryDelayIsBounded(t *testing.T) {
 	if got := retryDelay(100).Seconds(); got != 300 {
 		t.Fatalf("expected 300 seconds, got %v", got)

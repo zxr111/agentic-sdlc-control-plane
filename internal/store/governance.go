@@ -216,6 +216,10 @@ type ToolAuthorizationRequest struct {
 type ToolAuthorization struct {
 	CallID        string
 	ToolVersionID string
+	WorkflowID    string
+	ProjectID     int64
+	AgentType     string
+	WorkflowState string
 	AdapterType   string
 	AdapterConfig json.RawMessage
 	InputSchema   json.RawMessage
@@ -223,6 +227,22 @@ type ToolAuthorization struct {
 }
 
 func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorizationRequest) (ToolAuthorization, error) {
+	var workflowID, authoritativeAgentType, authoritativeWorkflowState string
+	var authoritativeProjectID int64
+	if err := s.db.QueryRowContext(ctx, `SELECT ar.workflow_id::text,w.gitlab_project_id,ar.agent_type,w.state
+		FROM agent_runs ar JOIN workflows w ON w.id=ar.workflow_id WHERE ar.id=$1`, request.AgentRunID).
+		Scan(&workflowID, &authoritativeProjectID, &authoritativeAgentType, &authoritativeWorkflowState); err != nil {
+		if err == sql.ErrNoRows {
+			return ToolAuthorization{}, ErrNotFound
+		}
+		return ToolAuthorization{}, err
+	}
+	scopeMismatch := (request.ProjectID != 0 && request.ProjectID != authoritativeProjectID) ||
+		(request.AgentType != "" && request.AgentType != authoritativeAgentType) ||
+		(request.WorkflowState != "" && request.WorkflowState != authoritativeWorkflowState)
+	request.ProjectID = authoritativeProjectID
+	request.AgentType = authoritativeAgentType
+	request.WorkflowState = authoritativeWorkflowState
 	var versionID, risk, rule, adapterType string
 	var adapterConfig, conditionsRaw, inputSchema []byte
 	var requiresGate bool
@@ -271,6 +291,12 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 		WorkflowState: request.WorkflowState, RiskLevel: risk, ConfiguredRule: rule, Shadow: request.Shadow,
 		ProductionLock: request.ProductionLock, HasGate: hasGate, Actor: request.Actor,
 		ActorAllowed: actorAllowed, EvidenceOK: evidenceOK, BudgetOK: budgetOK})
+	if scopeMismatch {
+		decision = tooling.Decision{Action: "DENY", Reason: "tool request scope does not match the authoritative Agent Run"}
+	}
+	if !hardToolScopeAllowed(request.ToolKey, authoritativeAgentType, authoritativeWorkflowState) {
+		decision = tooling.Decision{Action: "DENY", Reason: "tool is outside the hard Agent and workflow-stage boundary"}
+	}
 	if requiresGate && request.GateID == "" && decision.Action != "DENY" {
 		decision = tooling.Decision{Action: "REQUIRE_GATE", Reason: "tool policy requires an Engineer Gate", RequiresGate: true}
 	}
@@ -295,8 +321,22 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 	if err != nil {
 		return ToolAuthorization{}, err
 	}
-	return ToolAuthorization{CallID: callID, ToolVersionID: versionID, AdapterType: adapterType,
+	return ToolAuthorization{CallID: callID, ToolVersionID: versionID, WorkflowID: workflowID,
+		ProjectID: authoritativeProjectID, AgentType: authoritativeAgentType, WorkflowState: authoritativeWorkflowState, AdapterType: adapterType,
 		AdapterConfig: json.RawMessage(adapterConfig), InputSchema: json.RawMessage(inputSchema), Decision: decision}, nil
+}
+
+// hardToolScopeAllowed is a non-configurable privilege ceiling. Policies may
+// narrow these boundaries, but an accidentally broad policy cannot widen them.
+func hardToolScopeAllowed(toolKey, agentType, workflowState string) bool {
+	switch toolKey {
+	case "staging.deploy":
+		return agentType == "RELEASE" && workflowState == "RELEASE_CI_RUNNING"
+	case "production.deploy":
+		return false
+	default:
+		return true
+	}
 }
 
 func (s *Store) EnqueueGovernedToolOutbox(ctx context.Context, callID, toolKey, gateID string, input map[string]any) (json.RawMessage, error) {
@@ -342,6 +382,30 @@ func (s *Store) EnqueueGovernedToolOutbox(ctx context.Context, callID, toolKey, 
 		messageType = "delivery.trigger"
 		payload = map[string]any{"request_id": uuid.NewString(), "action": "staging_deploy", "workflow_id": workflowID,
 			"project_id": projectID, "issue_iid": issueIID, "commit_sha": commitSHA, "environment": "test"}
+	case "memory.propose":
+		key, _ := input["key"].(string)
+		content, _ := input["content"].(string)
+		key, content = strings.TrimSpace(key), strings.TrimSpace(content)
+		if key == "" || len(key) > 200 || content == "" || len(content) > 32*1024 {
+			return nil, errors.New("memory.propose requires a bounded key and content")
+		}
+		var sourceDocumentID string
+		if err := tx.QueryRowContext(ctx, `SELECT kd.id FROM tool_calls tc
+			JOIN agent_runs ar ON ar.id=tc.agent_run_id
+			JOIN context_entries ce ON ce.context_manifest_id=ar.context_manifest_id AND ce.source_type='KNOWLEDGE_CHUNK'
+			JOIN knowledge_chunks kc ON kc.id=ce.source_id
+			JOIN knowledge_versions kv ON kv.id=kc.knowledge_version_id
+			JOIN knowledge_documents kd ON kd.id=kv.document_id
+			WHERE tc.id=$1 AND kd.project_id=$2 AND kd.status='ACTIVE'
+			ORDER BY ce.authority_level DESC,ce.ordinal LIMIT 1`, callID, projectID).Scan(&sourceDocumentID); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, errors.New("memory.propose requires an active retrieved knowledge source")
+			}
+			return nil, err
+		}
+		messageType = "factory.propose_memory"
+		payload = map[string]any{"project_id": projectID, "key": key, "content": content,
+			"source_document_id": sourceDocumentID, "tool_call_id": callID}
 	default:
 		return nil, errors.New("tool has no governed outbox adapter")
 	}

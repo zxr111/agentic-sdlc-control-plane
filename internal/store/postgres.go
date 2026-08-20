@@ -1294,6 +1294,11 @@ type AgentRunTrace struct {
 }
 
 func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifactID string, trace AgentRunTrace, runError error) error {
+	if status == "COMPLETED" {
+		if err := s.validateAgentRunCompletion(ctx, id, trace); err != nil {
+			return err
+		}
+	}
 	var artifact any
 	if artifactID != "" {
 		artifact = artifactID
@@ -1337,4 +1342,44 @@ func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifac
 		return tx.Commit()
 	}
 	return err
+}
+
+func (s *Store) validateAgentRunCompletion(ctx context.Context, id string, trace AgentRunTrace) error {
+	var governed bool
+	var profileReady, promptReady, modelReady bool
+	if err := s.db.QueryRowContext(ctx, `SELECT context_manifest_id IS NOT NULL,
+		agent_profile_version_id IS NOT NULL,prompt_version_id IS NOT NULL,model_version_id IS NOT NULL
+		FROM agent_runs WHERE id=$1 AND status='RUNNING'`, id).
+		Scan(&governed, &profileReady, &promptReady, &modelReady); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	// Legacy V2 and engineer-visible callback runs have no governed V3 context.
+	if !governed {
+		return nil
+	}
+	if !profileReady || !promptReady || !modelReady {
+		return errors.New("governed Agent Run is missing immutable registry bindings")
+	}
+	if strings.TrimSpace(trace.ProviderResponseID) == "" || strings.TrimSpace(trace.FinishReason) == "" {
+		return errors.New("governed Agent Run is missing provider completion evidence")
+	}
+	var unsettledTools, invalidContext int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_calls
+		WHERE agent_run_id=$1 AND status NOT IN ('COMPLETED','FAILED','DENY','REQUIRE_GATE','QUEUED')`, id).Scan(&unsettledTools); err != nil {
+		return err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM context_entries ce JOIN agent_runs ar ON ar.context_manifest_id=ce.context_manifest_id
+		WHERE ar.id=$1 AND (ce.content_hash='' OR ce.citation_json IS NULL OR ce.citation_json='{}'::jsonb)`, id).Scan(&invalidContext); err != nil {
+		return err
+	}
+	if unsettledTools != 0 {
+		return errors.New("governed Agent Run has unsettled tool calls")
+	}
+	if invalidContext != 0 {
+		return errors.New("governed Agent Run has context entries without hash or citation evidence")
+	}
+	return nil
 }
