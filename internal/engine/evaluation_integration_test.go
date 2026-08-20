@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/agents"
@@ -33,7 +34,14 @@ func TestPromptEvaluationReplayIsShadowOnly(t *testing.T) {
 	}
 	definition := store.RegistryDefinition{AgentType: "REQUIREMENT", PromptKey: "eval-requirement", DisplayName: "Eval",
 		Instructions: "Return the required JSON", OutputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"decision":{"type":"string"},"facts":{"type":"array","items":{"type":"string"}}},"required":["decision","facts"]}`)}
-	if err := repository.BootstrapRegistry(ctx, "eval-model", []store.RegistryDefinition{definition}); err != nil {
+	definitions := []store.RegistryDefinition{definition}
+	for _, builtin := range agents.BuiltinDefinitions() {
+		if builtin.AgentType == "EVALUATION_JUDGE" {
+			definitions = append(definitions, store.RegistryDefinition{AgentType: builtin.AgentType, PromptKey: builtin.PromptKey,
+				DisplayName: builtin.DisplayName, Instructions: builtin.Instructions, OutputSchema: builtin.OutputSchema})
+		}
+	}
+	if err := repository.BootstrapRegistry(ctx, "eval-model", definitions); err != nil {
 		t.Fatal(err)
 	}
 	prompt, err := repository.ActivePromptVersion(ctx, "eval-requirement")
@@ -49,9 +57,14 @@ func TestPromptEvaluationReplayIsShadowOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(response, `{"id":"resp_eval","status":"completed","usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":1}},"output":[{"type":"message","content":[{"type":"output_text","text":"{\"decision\":\"ready\",\"facts\":[\"synthetic\"]}"}]}]}`)
+		if calls.Add(1) == 1 {
+			_, _ = io.WriteString(response, `{"id":"resp_eval","status":"completed","usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":1}},"output":[{"type":"message","content":[{"type":"output_text","text":"{\"decision\":\"ready\",\"facts\":[\"synthetic\"]}"}]}]}`)
+			return
+		}
+		_, _ = io.WriteString(response, `{"id":"resp_judge","status":"completed","usage":{"input_tokens":8,"output_tokens":4},"output":[{"type":"message","content":[{"type":"output_text","text":"{\"dimensions\":[{\"name\":\"completeness\",\"score\":0.9,\"evidence\":\"all required fields\"}],\"summary\":\"anonymous review\"}"}]}]}`)
 	}))
 	defer server.Close()
 	runner := New(repository, nil, nil, agents.New(server.URL, "test", "eval-model"), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -63,7 +76,7 @@ func TestPromptEvaluationReplayIsShadowOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Status != "COMPLETED" || !summary.Shadow || summary.Outputs != 1 || summary.Scores != 5 {
+	if summary.Status != "COMPLETED" || !summary.Shadow || summary.Outputs != 1 || summary.Scores != 6 || calls.Load() != 2 {
 		t.Fatalf("unexpected replay summary %#v", summary)
 	}
 }

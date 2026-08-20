@@ -361,17 +361,56 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := repository.CreatePromptVersion(ctx, "requirement-review", "review more safely",
+	candidateContent := "review more safely " + uuid.NewString()
+	candidate, err := repository.CreatePromptVersion(ctx, "requirement-review", candidateContent,
 		json.RawMessage(`{"type":"object"}`), "integration-test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	duplicate, err := repository.CreatePromptVersion(ctx, "requirement-review", "review more safely",
+	duplicate, err := repository.CreatePromptVersion(ctx, "requirement-review", candidateContent,
 		json.RawMessage(`{"type":"object"}`), "integration-test")
 	if err != nil || duplicate.ID != candidate.ID {
 		t.Fatalf("prompt candidate was not idempotent candidate=%#v duplicate=%#v err=%v", candidate, duplicate, err)
 	}
-	if err := repository.ActivatePromptVersion(ctx, "requirement-review", candidate.ID, "integration-reviewer"); err != nil {
+	if err := repository.ActivatePromptVersion(ctx, "requirement-review", candidate.ID, "integration-reviewer"); !errors.Is(err, ErrGovernanceRequired) {
+		t.Fatalf("draft prompt bypassed governance: %v", err)
+	}
+	suiteID, err := repository.EnsureEvaluationSuite(ctx, "promotion-"+candidate.ID, "REQUIREMENT", map[string]any{"minimum": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineRunID, err := repository.StartEvaluationRun(ctx, EvaluationRunInput{SuiteID: suiteID, PromptVersionID: baseline.ID, Shadow: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishEvaluationRun(ctx, baselineRunID, nil); err != nil {
+		t.Fatal(err)
+	}
+	candidateRunID, err := repository.StartEvaluationRun(ctx, EvaluationRunInput{SuiteID: suiteID, PromptVersionID: candidate.ID, Shadow: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishEvaluationRun(ctx, candidateRunID, nil); err != nil {
+		t.Fatal(err)
+	}
+	blindID, err := repository.CreateBlindReview(ctx, baselineRunID, candidateRunID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SubmitBlindReview(ctx, blindID, "reviewer-a", "RIGHT", "APPROVE", "better evidence"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SubmitBlindReview(ctx, blindID, "reviewer-b", "RIGHT", "APPROVE", "safer output"); err != nil {
+		t.Fatal(err)
+	}
+	canaryID, err := repository.CreateCanaryRelease(ctx, "PROMPT", candidate.ID, candidateRunID, blindID, []int64{81}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ApproveCanaryRelease(ctx, canaryID, "integration-reviewer", map[string]any{"errors": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PromotePromptVersion(ctx, "requirement-review", candidate.ID, candidateRunID, blindID, canaryID, "integration-reviewer"); err != nil {
 		t.Fatal(err)
 	}
 	active, err := repository.ActivePromptVersion(ctx, "requirement-review")

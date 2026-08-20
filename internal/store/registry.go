@@ -175,6 +175,18 @@ func (s *Store) ActivatePromptVersion(ctx context.Context, promptKey, versionID,
 		}
 		return err
 	}
+	var currentStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM prompt_versions WHERE id=$1 AND prompt_definition_id=$2`, versionID, definitionID).Scan(&currentStatus); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	if currentStatus != "RETIRED" {
+		return ErrGovernanceRequired
+	}
+	var previous any
+	_ = tx.QueryRowContext(ctx, `SELECT id FROM prompt_versions WHERE prompt_definition_id=$1 AND status='ACTIVE' LIMIT 1`, definitionID).Scan(&previous)
 	result, err := tx.ExecContext(ctx, `UPDATE prompt_versions SET status='RETIRED'
 		WHERE prompt_definition_id=$1 AND status='ACTIVE' AND id<>$2`, definitionID, versionID)
 	if err != nil {
@@ -192,6 +204,61 @@ func (s *Store) ActivatePromptVersion(ctx context.Context, promptKey, versionID,
 	}
 	if rows != 1 {
 		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO registry_activation_audits
+		(id,registry_type,definition_key,previous_version_id,activated_version_id,action,actor)
+		VALUES($1,'PROMPT',$2,$3,$4,'ROLLBACK',$5)`, uuid.NewString(), promptKey, previous, versionID, actor); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) PromotePromptVersion(ctx context.Context, promptKey, versionID, evaluationRunID, blindReviewID, canaryID, actor string) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var definitionID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM prompt_definitions WHERE prompt_key=$1 FOR UPDATE`, promptKey).Scan(&definitionID); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	var eligible bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM prompt_versions pv
+		JOIN evaluation_runs er ON er.prompt_version_id=pv.id AND er.id=$3 AND er.status='COMPLETED' AND er.shadow=true
+		JOIN evaluation_blind_reviews br ON br.id=$4 AND br.candidate_run_id=er.id AND br.status='APPROVED'
+		JOIN canary_releases cr ON cr.id=$5 AND cr.candidate_version_id=pv.id AND cr.evaluation_run_id=er.id
+			AND cr.blind_review_id=br.id AND cr.status='APPROVED'
+		WHERE pv.id=$1 AND pv.prompt_definition_id=$2 AND pv.status='DRAFT')`, versionID, definitionID, evaluationRunID, blindReviewID, canaryID).Scan(&eligible); err != nil {
+		return err
+	}
+	if !eligible {
+		return ErrGovernanceRequired
+	}
+	var previous any
+	_ = tx.QueryRowContext(ctx, `SELECT id FROM prompt_versions WHERE prompt_definition_id=$1 AND status='ACTIVE' LIMIT 1`, definitionID).Scan(&previous)
+	if _, err := tx.ExecContext(ctx, `UPDATE prompt_versions SET status='RETIRED' WHERE prompt_definition_id=$1 AND status='ACTIVE'`, definitionID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE prompt_versions SET status='ACTIVE',approved_by=$1,approved_at=CURRENT_TIMESTAMP WHERE id=$2 AND status='DRAFT'`, actor, versionID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO registry_activation_audits
+		(id,registry_type,definition_key,previous_version_id,activated_version_id,evaluation_run_id,blind_review_id,canary_release_id,action,actor)
+		VALUES($1,'PROMPT',$2,$3,$4,$5,$6,$7,'PROMOTE',$8)`, uuid.NewString(), promptKey, previous, versionID,
+		evaluationRunID, blindReviewID, canaryID, actor); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

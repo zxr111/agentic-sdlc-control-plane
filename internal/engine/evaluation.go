@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -24,6 +25,18 @@ func (e *Engine) RunPromptEvaluation(ctx context.Context, suiteID, promptVersion
 	if len(cases) == 0 {
 		return "", fmt.Errorf("evaluation suite %s has no cases", suiteID)
 	}
+	judge, judgeErr := e.store.ActivePromptVersion(ctx, "evaluation-judge")
+	judgeEnabled := judgeErr == nil
+	if judgeErr != nil && judgeErr != store.ErrNotFound {
+		return "", judgeErr
+	}
+	var judgeRuntime store.PromptRuntime
+	if judgeEnabled {
+		judgeRuntime, err = e.store.PromptRuntime(ctx, judge.ID)
+		if err != nil {
+			return "", err
+		}
+	}
 	runID, err := e.store.StartEvaluationRun(ctx, store.EvaluationRunInput{SuiteID: suiteID, PromptVersionID: promptVersionID, Shadow: true})
 	if err != nil {
 		return "", err
@@ -32,6 +45,31 @@ func (e *Engine) RunPromptEvaluation(ctx context.Context, suiteID, promptVersion
 		started := time.Now()
 		output, _, runErr := e.agents.GenerateCandidate(ctx, runID, prompt.Content, testCase.Input, prompt.OutputSchema)
 		scores := evaluation.DeterministicScores(output, testCase.Expectations)
+		if runErr == nil && judgeEnabled {
+			judgeInput, marshalErr := json.Marshal(map[string]any{"candidate_output": json.RawMessage(output), "expectations": testCase.Expectations})
+			if marshalErr != nil {
+				runErr = marshalErr
+			} else {
+				judgement, trace, err := e.agents.JudgeEvaluation(ctx, runID, judgeRuntime.Content, judgeInput, judgeRuntime.OutputSchema)
+				if err != nil {
+					runErr = fmt.Errorf("LLM judge: %w", err)
+				} else {
+					for _, dimension := range judgement.Dimensions {
+						value := dimension.Score
+						if value < 0 {
+							value = 0
+						}
+						if value > 1 {
+							value = 1
+						}
+						scores = append(scores, evaluation.Score{ScorerKey: "llm-judge", ScorerVersion: judge.ID,
+							Dimension: dimension.Name, Value: value, Evidence: map[string]any{"reason": dimension.Evidence,
+								"summary": judgement.Summary, "judge_prompt_version_id": judge.ID,
+								"provider_response_id": trace.ProviderResponseID, "model": trace.SelectedModelKey}})
+					}
+				}
+			}
+		}
 		if recordErr := e.store.RecordEvaluationOutput(ctx, runID, testCase.ID, output, "", time.Since(started), runErr, scores); recordErr != nil {
 			_ = e.store.FinishEvaluationRun(ctx, runID, recordErr)
 			return runID, recordErr

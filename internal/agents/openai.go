@@ -412,3 +412,19 @@ func (c *Client) GenerateCandidate(ctx context.Context, evaluationRunID, prompt 
 	trace, err := c.generate(ctx, evaluationRunID, "evaluation_candidate_v1", prompt, string(input), schema, &output)
 	return output, trace, err
 }
+
+type EvaluationJudgeResult struct {
+	Dimensions []struct {
+		Name     string  `json:"name"`
+		Score    float64 `json:"score"`
+		Evidence string  `json:"evidence"`
+	} `json:"dimensions"`
+	Summary string `json:"summary"`
+}
+
+func (c *Client) JudgeEvaluation(ctx context.Context, evaluationRunID, prompt string, anonymousInput json.RawMessage,
+	schema json.RawMessage) (EvaluationJudgeResult, Trace, error) {
+	var output EvaluationJudgeResult
+	trace, err := c.generate(ctx, evaluationRunID, "evaluation_judge_v1", prompt, string(anonymousInput), schema, &output)
+	return output, trace, err
+}
