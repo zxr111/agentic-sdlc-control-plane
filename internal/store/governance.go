@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/multiagent"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/tooling"
@@ -20,6 +21,7 @@ type OpinionRecorder struct {
 type ToolSeed struct {
 	Key, DisplayName, Description, RiskLevel, AdapterType string
 	InputSchema, OutputSchema                             json.RawMessage
+	AdapterConfig                                         any
 	DefaultDecision                                       string
 	RequiresGate                                          bool
 }
@@ -27,6 +29,58 @@ type ToolSeed struct {
 type SkillSeed struct {
 	Key, DisplayName, Description, Instructions string
 	TriggerRules, Scope                         any
+}
+
+type ActiveSkill struct {
+	VersionID    string
+	Key          string
+	Instructions string
+	ContentHash  string
+}
+
+func (s *Store) ActiveSkillsForAgent(ctx context.Context, agentType string, allowlist []string) ([]ActiveSkill, error) {
+	allowed := map[string]bool{}
+	for _, key := range allowlist {
+		allowed[key] = true
+	}
+	if len(allowed) == 0 {
+		return []ActiveSkill{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT sv.id,sd.skill_key,sv.instructions,sv.content_hash,sv.trigger_rules
+		FROM skill_versions sv JOIN skill_definitions sd ON sd.id=sv.skill_definition_id
+		WHERE sv.status='ACTIVE' ORDER BY sd.skill_key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []ActiveSkill{}
+	for rows.Next() {
+		var skill ActiveSkill
+		var triggerRaw []byte
+		if err := rows.Scan(&skill.VersionID, &skill.Key, &skill.Instructions, &skill.ContentHash, &triggerRaw); err != nil {
+			return nil, err
+		}
+		if !allowed[skill.Key] {
+			continue
+		}
+		var trigger struct {
+			AgentTypes []string `json:"agent_types"`
+		}
+		if err := json.Unmarshal(triggerRaw, &trigger); err != nil {
+			return nil, err
+		}
+		matched := false
+		for _, value := range trigger.AgentTypes {
+			if value == "*" || strings.Contains(strings.ToUpper(agentType), strings.ToUpper(value)) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			result = append(result, skill)
+		}
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) BootstrapGovernance(ctx context.Context, tools []ToolSeed, skills []SkillSeed) error {
@@ -41,13 +95,21 @@ func (s *Store) BootstrapGovernance(ctx context.Context, tools []ToolSeed, skill
 			VALUES ($1,$2,$3,$4) ON CONFLICT (tool_key) DO NOTHING`, definitionID, seed.Key, seed.DisplayName, seed.Description); err != nil {
 			return err
 		}
-		digest := sha256.Sum256(append(append(append([]byte(seed.RiskLevel+":"+seed.AdapterType), 0), seed.InputSchema...), seed.OutputSchema...))
+		adapterConfig, err := json.Marshal(seed.AdapterConfig)
+		if err != nil {
+			return err
+		}
+		if seed.AdapterConfig == nil {
+			adapterConfig = []byte(`{}`)
+		}
+		versionMaterial := append(append(append(append([]byte(seed.RiskLevel+":"+seed.AdapterType), 0), seed.InputSchema...), seed.OutputSchema...), adapterConfig...)
+		digest := sha256.Sum256(versionMaterial)
 		hash := hex.EncodeToString(digest[:])
 		versionID := registryID("tool-version", seed.Key+":"+hash)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO tool_versions
-			(id,tool_definition_id,version,status,input_schema,output_schema,risk_level,adapter_type,content_hash)
-			VALUES ($1,$2,1,'ACTIVE',$3,$4,$5,$6,$7) ON CONFLICT (tool_definition_id,version) DO NOTHING`,
-			versionID, definitionID, string(seed.InputSchema), string(seed.OutputSchema), seed.RiskLevel, seed.AdapterType, hash); err != nil {
+			(id,tool_definition_id,version,status,input_schema,output_schema,risk_level,adapter_type,adapter_config,content_hash)
+			VALUES ($1,$2,1,'ACTIVE',$3,$4,$5,$6,$7,$8) ON CONFLICT (tool_definition_id,version) DO NOTHING`,
+			versionID, definitionID, string(seed.InputSchema), string(seed.OutputSchema), seed.RiskLevel, seed.AdapterType, string(adapterConfig), hash); err != nil {
 			return err
 		}
 		policyID := registryID("tool-policy", seed.Key+":default")
@@ -120,20 +182,23 @@ type ToolAuthorizationRequest struct {
 type ToolAuthorization struct {
 	CallID        string
 	ToolVersionID string
+	AdapterType   string
+	AdapterConfig json.RawMessage
 	Decision      tooling.Decision
 }
 
 func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorizationRequest) (ToolAuthorization, error) {
-	var versionID, risk, rule string
+	var versionID, risk, rule, adapterType string
+	var adapterConfig []byte
 	var requiresGate bool
-	err := s.db.QueryRowContext(ctx, `SELECT tv.id,tv.risk_level,COALESCE(tp.decision,'DENY'),COALESCE(tp.requires_gate,false)
+	err := s.db.QueryRowContext(ctx, `SELECT tv.id,tv.risk_level,COALESCE(tp.decision,'DENY'),COALESCE(tp.requires_gate,false),tv.adapter_type,tv.adapter_config
 		FROM tool_versions tv JOIN tool_definitions td ON td.id=tv.tool_definition_id
 		LEFT JOIN LATERAL (SELECT decision,requires_gate FROM tool_policies
 			WHERE tool_version_id=tv.id AND (project_id IS NULL OR project_id=$2)
 			AND (agent_type='*' OR agent_type=$3) AND (workflow_state='*' OR workflow_state=$4)
 			ORDER BY (project_id IS NOT NULL) DESC,(agent_type<>'*') DESC,(workflow_state<>'*') DESC LIMIT 1) tp ON true
 		WHERE td.tool_key=$1 AND tv.status='ACTIVE' ORDER BY tv.version DESC LIMIT 1`, request.ToolKey, request.ProjectID, request.AgentType, request.WorkflowState).
-		Scan(&versionID, &risk, &rule, &requiresGate)
+		Scan(&versionID, &risk, &rule, &requiresGate, &adapterType, &adapterConfig)
 	if err == sql.ErrNoRows {
 		return ToolAuthorization{}, ErrNotFound
 	}
@@ -167,7 +232,8 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 	if err != nil {
 		return ToolAuthorization{}, err
 	}
-	return ToolAuthorization{CallID: callID, ToolVersionID: versionID, Decision: decision}, nil
+	return ToolAuthorization{CallID: callID, ToolVersionID: versionID, AdapterType: adapterType,
+		AdapterConfig: json.RawMessage(adapterConfig), Decision: decision}, nil
 }
 
 func (s *Store) FinishToolCall(ctx context.Context, callID, status, resultHash string, callError error) error {

@@ -484,6 +484,14 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		TriggerRules: map[string]any{"agent_types": []string{"SECURITY"}}, Scope: map[string]any{"allowlist": true}}}); err != nil {
 		t.Fatal(err)
 	}
+	skills, err := repository.ActiveSkillsForAgent(ctx, "ARCHITECTURE_SECURITY", []string{"threat-modeling"})
+	if err != nil || len(skills) != 1 || skills[0].Key != "threat-modeling" {
+		t.Fatalf("allowed skill resolution=%#v err=%v", skills, err)
+	}
+	blockedSkills, err := repository.ActiveSkillsForAgent(ctx, "ARCHITECTURE_SECURITY", []string{"other-skill"})
+	if err != nil || len(blockedSkills) != 0 {
+		t.Fatalf("unlisted skill entered context=%#v err=%v", blockedSkills, err)
+	}
 	allowed, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
 		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS",
 		Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})

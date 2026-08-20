@@ -442,7 +442,22 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 				contextText += supplemental.String()
 			}
 		}
-		var err error
+		project := e.projects[workflow.GitLabProjectID]
+		skills, err := e.store.ActiveSkillsForAgent(ctx, agentType, project.AllowedSkills)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve governed skills: %w", err)
+		}
+		if len(skills) > 0 {
+			var skillText strings.Builder
+			skillText.WriteString("\n\n--- 项目允许的版本化 Agent Skills ---\n")
+			for _, skill := range skills {
+				fmt.Fprintf(&skillText, "\n[%s / SHA-256 %s]\n%s\n", skill.Key, skill.ContentHash, skill.Instructions)
+				entries = append(entries, store.ContextEntryInput{SourceType: "SKILL_VERSION", SourceID: skill.VersionID,
+					AuthorityLevel: 80, TokenCount: len(strings.Fields(skill.Instructions)), ContentHash: skill.ContentHash,
+					Citation: map[string]any{"skill_key": skill.Key, "skill_version_id": skill.VersionID}})
+			}
+			contextText += skillText.String()
+		}
 		manifestID, err = e.store.CreateContextManifest(ctx, workflow.ID, agentType, "v1", entries)
 		if err != nil {
 			return "", "", err

@@ -8,6 +8,16 @@
     "default_branch": "master",
     "integration_branch": true,
     "production_enabled": false,
+    "allowed_skills": [
+      "requirement-completeness",
+      "api-design-review",
+      "database-migration-review",
+      "threat-modeling",
+      "go-service-review",
+      "kubernetes-review",
+      "test-coverage-review",
+      "incident-analysis"
+    ],
     "reviewer_ids": {
       "REQUIREMENT": [995],
       "PRD": [995],

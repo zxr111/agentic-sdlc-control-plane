@@ -243,6 +243,7 @@ type ProjectConfig struct {
 	DefaultBranch     string                `json:"default_branch,omitempty"`
 	IntegrationBranch bool                  `json:"integration_branch,omitempty"`
 	ProductionEnabled bool                  `json:"production_enabled,omitempty"`
+	AllowedSkills     []string              `json:"allowed_skills,omitempty"`
 }
 
 func (p ProjectConfig) Validate() error {

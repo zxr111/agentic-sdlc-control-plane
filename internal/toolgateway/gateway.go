@@ -13,7 +13,10 @@ import (
 
 var ErrDenied = errors.New("tool call denied by policy")
 
-type Gateway struct{ Store *store.Store }
+type Gateway struct {
+	Store *store.Store
+	MCP   *MCPClient
+}
 
 type Request struct {
 	AgentRunID     string
@@ -72,7 +75,18 @@ func (g Gateway) Execute(ctx context.Context, request Request) (json.RawMessage,
 			return nil, g.fail(ctx, authorization.CallID, err)
 		}
 	default:
-		return nil, g.fail(ctx, authorization.CallID, errors.New("tool adapter is not executable in-process"))
+		if authorization.AdapterType != "mcp" || g.MCP == nil {
+			return nil, g.fail(ctx, authorization.CallID, errors.New("tool adapter is not executable in-process"))
+		}
+		var config MCPAdapterConfig
+		if err := json.Unmarshal(authorization.AdapterConfig, &config); err != nil {
+			return nil, g.fail(ctx, authorization.CallID, errors.New("invalid MCP adapter configuration"))
+		}
+		var err error
+		output, err = g.MCP.Call(ctx, config, request.ToolKey, request.Input)
+		if err != nil {
+			return nil, g.fail(ctx, authorization.CallID, err)
+		}
 	}
 	digest := sha256.Sum256(output)
 	if err := g.Store.FinishToolCall(ctx, authorization.CallID, "COMPLETED", hex.EncodeToString(digest[:]), nil); err != nil {
