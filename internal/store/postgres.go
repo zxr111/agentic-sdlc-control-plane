@@ -1262,6 +1262,7 @@ type AgentRunTrace struct {
 	LatencyMS          int64
 	FinishReason       string
 	SelectedModelKey   string
+	ProviderModelID    string
 	Fallback           bool
 	RouteReason        string
 	RiskLevel          string
@@ -1278,11 +1279,11 @@ func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifac
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET status=$1,output_artifact_id=$2,
 		error_summary=$3,provider_response_id=$4,input_tokens=$5,cached_tokens=$6,output_tokens=$7,
-		reasoning_tokens=$8,estimated_cost_microunits=$9,latency_ms=$10,finish_reason=$11,
-		model_version_id=COALESCE((SELECT id FROM model_versions WHERE model_key=$12 AND status='ACTIVE' ORDER BY created_at DESC LIMIT 1),model_version_id),
-		finished_at=CURRENT_TIMESTAMP WHERE id=$13`,
+		reasoning_tokens=$8,estimated_cost_microunits=$9,latency_ms=$10,finish_reason=$11,provider_model_id=$12,
+		model_version_id=COALESCE((SELECT id FROM model_versions WHERE model_key=$13 AND status='ACTIVE' ORDER BY created_at DESC LIMIT 1),model_version_id),
+		finished_at=CURRENT_TIMESTAMP WHERE id=$14`,
 		status, artifact, errorSummary, trace.ProviderResponseID, trace.InputTokens, trace.CachedTokens,
-		trace.OutputTokens, trace.ReasoningTokens, trace.EstimatedCost, trace.LatencyMS, trace.FinishReason, trace.SelectedModelKey, id)
+		trace.OutputTokens, trace.ReasoningTokens, trace.EstimatedCost, trace.LatencyMS, trace.FinishReason, trace.ProviderModelID, trace.SelectedModelKey, id)
 	if err != nil {
 		return err
 	}

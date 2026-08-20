@@ -43,6 +43,7 @@ type Trace struct {
 	FinishReason       string
 	SelectedModelID    string
 	SelectedModelKey   string
+	ProviderModelID    string
 	Fallback           bool
 	EstimatedCost      int64
 	RouteReason        string
@@ -342,6 +343,7 @@ func (c *Client) generate(ctx context.Context, workflowID, schemaName, instructi
 	}
 	var envelope struct {
 		ID     string `json:"id"`
+		Model  string `json:"model"`
 		Status string `json:"status"`
 		Usage  struct {
 			InputTokens        int64 `json:"input_tokens"`
@@ -369,6 +371,10 @@ func (c *Client) generate(ctx context.Context, workflowID, schemaName, instructi
 		return trace, err
 	}
 	trace.ProviderResponseID = envelope.ID
+	trace.ProviderModelID = envelope.Model
+	if trace.ProviderModelID == "" {
+		trace.ProviderModelID = modelKey
+	}
 	trace.InputTokens = envelope.Usage.InputTokens
 	trace.CachedTokens = envelope.Usage.InputTokensDetails.CachedTokens
 	trace.OutputTokens = envelope.Usage.OutputTokens

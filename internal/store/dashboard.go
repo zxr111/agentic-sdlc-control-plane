@@ -347,7 +347,7 @@ func (s *Store) loadDashboardSources(ctx context.Context, result *DashboardData,
 		), latest AS (
 			SELECT DISTINCT ON (s.workflow_id,s.confluence_page_id)
 				s.workflow_id,s.confluence_page_id,s.source_version,s.title,s.source_url,
-				s.content_hash,jsonb_array_length(s.images_json) AS image_count,s.created_at AS captured_at
+			s.content_hash,CASE WHEN jsonb_typeof(s.images_json)='array' THEN jsonb_array_length(s.images_json) ELSE 0 END AS image_count,s.created_at AS captured_at
 			FROM source_snapshots s JOIN recent r ON r.id=s.workflow_id
 			ORDER BY s.workflow_id,s.confluence_page_id,s.created_at DESC
 		)

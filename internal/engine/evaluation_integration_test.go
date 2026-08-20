@@ -76,7 +76,8 @@ func TestPromptEvaluationReplayIsShadowOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Status != "COMPLETED" || !summary.Shadow || summary.Outputs != 1 || summary.Scores != 6 || calls.Load() != 2 {
+	if summary.Status != "COMPLETED" || !summary.Shadow || summary.Outputs != 1 || summary.Scores != 6 || calls.Load() != 2 ||
+		summary.ProviderOutputs != 1 || summary.InputTokens != 10 || summary.OutputTokens != 5 {
 		t.Fatalf("unexpected replay summary %#v", summary)
 	}
 }

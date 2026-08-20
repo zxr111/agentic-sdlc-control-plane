@@ -113,6 +113,16 @@ func (s *Store) StartEvaluationRun(ctx context.Context, input EvaluationRunInput
 
 func (s *Store) RecordEvaluationOutput(ctx context.Context, runID, caseID string, output json.RawMessage,
 	artifactID string, latency time.Duration, runError error, scores []evaluation.Score) error {
+	return s.RecordEvaluationOutputTrace(ctx, runID, caseID, output, artifactID, latency, runError, scores, EvaluationOutputTrace{})
+}
+
+type EvaluationOutputTrace struct {
+	ProviderResponseID, ProviderModelID string
+	InputTokens, OutputTokens           int64
+}
+
+func (s *Store) RecordEvaluationOutputTrace(ctx context.Context, runID, caseID string, output json.RawMessage,
+	artifactID string, latency time.Duration, runError error, scores []evaluation.Score, trace EvaluationOutputTrace) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -124,11 +134,12 @@ func (s *Store) RecordEvaluationOutput(ctx context.Context, runID, caseID string
 	}
 	outputID := uuid.NewString()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_outputs
-		(id,evaluation_run_id,evaluation_case_id,output_json,artifact_id,latency_ms,error_summary)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (evaluation_run_id,evaluation_case_id) DO UPDATE SET
+		(id,evaluation_run_id,evaluation_case_id,output_json,artifact_id,latency_ms,error_summary,provider_response_id,provider_model_id,input_tokens,output_tokens)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (evaluation_run_id,evaluation_case_id) DO UPDATE SET
 		output_json=EXCLUDED.output_json,artifact_id=EXCLUDED.artifact_id,latency_ms=EXCLUDED.latency_ms,
-		error_summary=EXCLUDED.error_summary RETURNING id`, outputID, runID, caseID, string(output),
-		nullableUUID(artifactID), latency.Milliseconds(), errorSummary); err != nil {
+		error_summary=EXCLUDED.error_summary,provider_response_id=EXCLUDED.provider_response_id,provider_model_id=EXCLUDED.provider_model_id,
+		input_tokens=EXCLUDED.input_tokens,output_tokens=EXCLUDED.output_tokens RETURNING id`, outputID, runID, caseID, string(output),
+		nullableUUID(artifactID), latency.Milliseconds(), errorSummary, trace.ProviderResponseID, trace.ProviderModelID, trace.InputTokens, trace.OutputTokens); err != nil {
 		return err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM evaluation_outputs WHERE evaluation_run_id=$1 AND evaluation_case_id=$2`,
@@ -180,17 +191,23 @@ type EvaluationComparison struct {
 }
 
 type EvaluationRunSummary struct {
-	ID, Status      string
-	Shadow          bool
-	Outputs, Scores int
+	ID, Status                string
+	Shadow                    bool
+	Outputs, Scores           int
+	InputTokens, OutputTokens int64
+	ProviderOutputs           int
 }
 
 func (s *Store) EvaluationRunSummary(ctx context.Context, runID string) (EvaluationRunSummary, error) {
 	var result EvaluationRunSummary
-	err := s.db.QueryRowContext(ctx, `SELECT er.id,er.status,er.shadow,COUNT(DISTINCT eo.id),COUNT(es.id)
+	err := s.db.QueryRowContext(ctx, `SELECT er.id,er.status,er.shadow,COUNT(DISTINCT eo.id),COUNT(es.id),
+		COALESCE(MAX(usage.input_tokens),0),COALESCE(MAX(usage.output_tokens),0),COALESCE(MAX(usage.provider_outputs),0)
 		FROM evaluation_runs er LEFT JOIN evaluation_outputs eo ON eo.evaluation_run_id=er.id
-		LEFT JOIN evaluation_scores es ON es.evaluation_output_id=eo.id WHERE er.id=$1
-		GROUP BY er.id,er.status,er.shadow`, runID).Scan(&result.ID, &result.Status, &result.Shadow, &result.Outputs, &result.Scores)
+		LEFT JOIN evaluation_scores es ON es.evaluation_output_id=eo.id
+		LEFT JOIN LATERAL(SELECT SUM(input_tokens) input_tokens,SUM(output_tokens) output_tokens,
+			COUNT(*) FILTER(WHERE provider_response_id<>'') provider_outputs FROM evaluation_outputs WHERE evaluation_run_id=er.id) usage ON true WHERE er.id=$1
+		GROUP BY er.id,er.status,er.shadow`, runID).Scan(&result.ID, &result.Status, &result.Shadow, &result.Outputs, &result.Scores,
+		&result.InputTokens, &result.OutputTokens, &result.ProviderOutputs)
 	if err == sql.ErrNoRows {
 		return EvaluationRunSummary{}, ErrNotFound
 	}

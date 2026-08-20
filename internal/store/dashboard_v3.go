@@ -7,14 +7,19 @@ import (
 )
 
 type DashboardV3 struct {
-	Registry    DashboardV3Registry     `json:"registry"`
-	Usage       DashboardV3Usage        `json:"usage"`
-	AgentRuns   []DashboardV3AgentRun   `json:"agent_runs"`
-	Opinions    []DashboardV3Opinion    `json:"opinions"`
-	Routes      []DashboardV3Route      `json:"routes"`
-	Evaluations []DashboardV3Evaluation `json:"evaluations"`
-	Knowledge   DashboardV3Knowledge    `json:"knowledge"`
-	ToolCalls   []DashboardV3ToolCall   `json:"tool_calls"`
+	Registry     DashboardV3Registry      `json:"registry"`
+	Usage        DashboardV3Usage         `json:"usage"`
+	AgentRuns    []DashboardV3AgentRun    `json:"agent_runs"`
+	Opinions     []DashboardV3Opinion     `json:"opinions"`
+	Routes       []DashboardV3Route       `json:"routes"`
+	Evaluations  []DashboardV3Evaluation  `json:"evaluations"`
+	Knowledge    DashboardV3Knowledge     `json:"knowledge"`
+	ToolCalls    []DashboardV3ToolCall    `json:"tool_calls"`
+	Comparisons  []DashboardV3Comparison  `json:"comparisons"`
+	BlindReviews []DashboardV3BlindReview `json:"blind_reviews"`
+	Canaries     []DashboardV3Canary      `json:"canaries"`
+	Activations  []DashboardV3Activation  `json:"activations"`
+	ModelHealth  []DashboardV3ModelHealth `json:"model_health"`
 }
 
 type DashboardV3Registry struct {
@@ -98,12 +103,53 @@ type DashboardV3ToolCall struct {
 	StartedAt      time.Time `json:"started_at"`
 }
 
+type DashboardV3Comparison struct {
+	BaselineRunID  string    `json:"baseline_run_id"`
+	CandidateRunID string    `json:"candidate_run_id"`
+	Decision       string    `json:"decision"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+type DashboardV3BlindReview struct {
+	ID                string    `json:"id"`
+	Status            string    `json:"status"`
+	Submissions       int       `json:"submissions"`
+	RequiredApprovals int       `json:"required_approvals"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+type DashboardV3Canary struct {
+	ID                 string    `json:"id"`
+	CandidateType      string    `json:"candidate_type"`
+	CandidateVersionID string    `json:"candidate_version_id"`
+	TrafficPercent     int       `json:"traffic_percent"`
+	Status             string    `json:"status"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+type DashboardV3Activation struct {
+	RegistryType  string    `json:"registry_type"`
+	DefinitionKey string    `json:"definition_key"`
+	Action        string    `json:"action"`
+	Actor         string    `json:"actor"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+type DashboardV3ModelHealth struct {
+	ModelKey     string    `json:"model_key"`
+	Healthy      bool      `json:"healthy"`
+	LatencyMS    int64     `json:"latency_ms"`
+	ErrorSummary string    `json:"error_summary,omitempty"`
+	ObservedAt   time.Time `json:"observed_at"`
+}
+
 func (s *Store) loadDashboardV3(ctx context.Context, result *DashboardV3, limit int) error {
 	result.AgentRuns = []DashboardV3AgentRun{}
 	result.Opinions = []DashboardV3Opinion{}
 	result.Routes = []DashboardV3Route{}
 	result.Evaluations = []DashboardV3Evaluation{}
 	result.ToolCalls = []DashboardV3ToolCall{}
+	result.Comparisons = []DashboardV3Comparison{}
+	result.BlindReviews = []DashboardV3BlindReview{}
+	result.Canaries = []DashboardV3Canary{}
+	result.Activations = []DashboardV3Activation{}
+	result.ModelHealth = []DashboardV3ModelHealth{}
 	if err := s.db.QueryRowContext(ctx, `SELECT
 		(SELECT count(*) FROM prompt_versions WHERE status='ACTIVE'),
 		(SELECT count(*) FROM model_versions WHERE status='ACTIVE'),
@@ -143,7 +189,94 @@ func (s *Store) loadDashboardV3(ctx context.Context, result *DashboardV3, limit 
 		&result.Knowledge.CandidateMemories); err != nil {
 		return err
 	}
-	return s.loadDashboardV3ToolCalls(ctx, result, limit)
+	if err := s.loadDashboardV3ToolCalls(ctx, result, limit); err != nil {
+		return err
+	}
+	return s.loadDashboardV3Governance(ctx, result, limit)
+}
+
+func (s *Store) loadDashboardV3Governance(ctx context.Context, result *DashboardV3, limit int) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT baseline_run_id::text,candidate_run_id::text,decision,created_at FROM evaluation_comparisons ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item DashboardV3Comparison
+		if err := rows.Scan(&item.BaselineRunID, &item.CandidateRunID, &item.Decision, &item.CreatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		result.Comparisons = append(result.Comparisons, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.db.QueryContext(ctx, `SELECT r.id::text,r.status,count(s.id),r.required_approvals,r.created_at FROM evaluation_blind_reviews r LEFT JOIN evaluation_blind_submissions s ON s.blind_review_id=r.id GROUP BY r.id ORDER BY r.created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item DashboardV3BlindReview
+		if err := rows.Scan(&item.ID, &item.Status, &item.Submissions, &item.RequiredApprovals, &item.CreatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		result.BlindReviews = append(result.BlindReviews, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.db.QueryContext(ctx, `SELECT id::text,candidate_type,candidate_version_id::text,traffic_percent,status,created_at FROM canary_releases ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item DashboardV3Canary
+		if err := rows.Scan(&item.ID, &item.CandidateType, &item.CandidateVersionID, &item.TrafficPercent, &item.Status, &item.CreatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		result.Canaries = append(result.Canaries, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.db.QueryContext(ctx, `SELECT registry_type,definition_key,action,actor,created_at FROM registry_activation_audits ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item DashboardV3Activation
+		if err := rows.Scan(&item.RegistryType, &item.DefinitionKey, &item.Action, &item.Actor, &item.CreatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		result.Activations = append(result.Activations, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.db.QueryContext(ctx, `SELECT mv.model_key,mh.healthy,mh.latency_ms,mh.error_summary,mh.observed_at FROM model_health_events mh JOIN model_versions mv ON mv.id=mh.model_version_id ORDER BY mh.observed_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item DashboardV3ModelHealth
+		if err := rows.Scan(&item.ModelKey, &item.Healthy, &item.LatencyMS, &item.ErrorSummary, &item.ObservedAt); err != nil {
+			return err
+		}
+		result.ModelHealth = append(result.ModelHealth, item)
+	}
+	return rows.Err()
 }
 
 func nullText(value sql.NullString) string {

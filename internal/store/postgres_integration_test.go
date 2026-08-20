@@ -457,6 +457,7 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	}
 	manifestID, err := repository.CreateContextManifest(ctx, workflow.ID, "REQUIREMENT", "v1", []ContextEntryInput{{
 		SourceType: "CONFLUENCE_SNAPSHOT", AuthorityLevel: 100, TokenCount: 12,
+		Required:    true,
 		ContentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Citation:    map[string]any{"url": "https://example.test/wiki/1", "version": 1},
 	}})
@@ -470,7 +471,7 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	}
 	trace := AgentRunTrace{ProviderResponseID: "resp_test", InputTokens: 120, CachedTokens: 20,
 		OutputTokens: 40, ReasoningTokens: 15, EstimatedCost: 99, LatencyMS: 321, FinishReason: "completed",
-		SelectedModelKey: "test-model", Fallback: true, RouteReason: "controlled fallback", RiskLevel: "HIGH"}
+		SelectedModelKey: "test-model", ProviderModelID: "test-model-2026-08-01", Fallback: true, RouteReason: "controlled fallback", RiskLevel: "HIGH"}
 	if err := repository.FinishAgentRunWithTrace(ctx, runID, "COMPLETED", "", trace, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -480,12 +481,12 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		ORDER BY mhe.observed_at DESC LIMIT 1`).Scan(&healthy); err != nil || !healthy {
 		t.Fatalf("model health event healthy=%t err=%v", healthy, err)
 	}
-	var gotManifest, responseID, finishReason, profileVersionID, promptVersionID, modelVersionID string
+	var gotManifest, responseID, finishReason, profileVersionID, promptVersionID, modelVersionID, providerModelID string
 	var inputTokens, cachedTokens, outputTokens, reasoningTokens, latencyMS int64
 	if err := repository.db.QueryRowContext(ctx, `SELECT context_manifest_id,provider_response_id,input_tokens,
-		cached_tokens,output_tokens,reasoning_tokens,latency_ms,finish_reason,agent_profile_version_id,prompt_version_id,model_version_id
+		cached_tokens,output_tokens,reasoning_tokens,latency_ms,finish_reason,agent_profile_version_id,prompt_version_id,model_version_id,provider_model_id
 		FROM agent_runs WHERE id=$1`, runID).Scan(&gotManifest, &responseID, &inputTokens, &cachedTokens, &outputTokens,
-		&reasoningTokens, &latencyMS, &finishReason, &profileVersionID, &promptVersionID, &modelVersionID); err != nil {
+		&reasoningTokens, &latencyMS, &finishReason, &profileVersionID, &promptVersionID, &modelVersionID, &providerModelID); err != nil {
 		t.Fatal(err)
 	}
 	if gotManifest != manifestID || responseID != "resp_test" || inputTokens != 120 || cachedTokens != 20 ||
@@ -495,6 +496,13 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	}
 	if profileVersionID == "" || promptVersionID == "" || modelVersionID == "" {
 		t.Fatalf("registry versions were not bound profile=%s prompt=%s model=%s", profileVersionID, promptVersionID, modelVersionID)
+	}
+	if providerModelID != "test-model-2026-08-01" {
+		t.Fatalf("provider model id=%s", providerModelID)
+	}
+	var required bool
+	if err := repository.db.QueryRowContext(ctx, `SELECT required FROM context_entries WHERE context_manifest_id=$1`, manifestID).Scan(&required); err != nil || !required {
+		t.Fatalf("required context=%t err=%v", required, err)
 	}
 	var routeCount int
 	if err := repository.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_route_decisions WHERE agent_run_id=$1

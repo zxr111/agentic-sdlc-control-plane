@@ -457,6 +457,7 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 			entries = append(entries, store.ContextEntryInput{
 				SourceType: "CONFLUENCE_SNAPSHOT", SourceID: snapshot.ID, AuthorityLevel: 100,
 				TokenCount: len(strings.Fields(snapshot.NormalizedText)), ContentHash: snapshot.ContentHash,
+				Required: true,
 				Citation: map[string]any{"url": snapshot.URL, "page_id": snapshot.ConfluencePageID, "version": snapshot.Version},
 			})
 		}
@@ -531,7 +532,8 @@ func storeTrace(trace agents.Trace) store.AgentRunTrace {
 		OutputTokens: trace.OutputTokens, ReasoningTokens: trace.ReasoningTokens,
 		LatencyMS: trace.Latency.Milliseconds(), FinishReason: trace.FinishReason,
 		SelectedModelKey: trace.SelectedModelKey, Fallback: trace.Fallback, EstimatedCost: trace.EstimatedCost,
-		RouteReason: trace.RouteReason, RiskLevel: trace.RiskLevel,
+		ProviderModelID: trace.ProviderModelID,
+		RouteReason:     trace.RouteReason, RiskLevel: trace.RiskLevel,
 	}
 }
 

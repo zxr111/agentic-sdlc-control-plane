@@ -17,6 +17,7 @@ type ContextEntryInput struct {
 	TokenCount     int
 	ContentHash    string
 	Citation       any
+	Required       bool
 }
 
 // CreateContextManifest persists the exact ordered source set supplied to an
@@ -50,9 +51,9 @@ func (s *Store) CreateContextManifest(ctx context.Context, workflowID, purpose, 
 			sourceID = entry.SourceID
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO context_entries
-			(id,context_manifest_id,ordinal,source_type,source_id,authority_level,token_count,content_hash,citation_json)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, uuid.NewString(), manifestID, index, entry.SourceType,
-			sourceID, entry.AuthorityLevel, entry.TokenCount, entry.ContentHash, string(citation)); err != nil {
+			(id,context_manifest_id,ordinal,source_type,source_id,authority_level,token_count,content_hash,citation_json,required)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, uuid.NewString(), manifestID, index, entry.SourceType,
+			sourceID, entry.AuthorityLevel, entry.TokenCount, entry.ContentHash, string(citation), entry.Required); err != nil {
 			return "", err
 		}
 	}

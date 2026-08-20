@@ -43,7 +43,7 @@ func (e *Engine) RunPromptEvaluation(ctx context.Context, suiteID, promptVersion
 	}
 	for _, testCase := range cases {
 		started := time.Now()
-		output, _, runErr := e.agents.GenerateCandidate(ctx, runID, prompt.Content, testCase.Input, prompt.OutputSchema)
+		output, candidateTrace, runErr := e.agents.GenerateCandidate(ctx, runID, prompt.Content, testCase.Input, prompt.OutputSchema)
 		scores := evaluation.DeterministicScores(output, testCase.Expectations)
 		if runErr == nil && judgeEnabled {
 			judgeInput, marshalErr := json.Marshal(map[string]any{"candidate_output": json.RawMessage(output), "expectations": testCase.Expectations})
@@ -70,7 +70,9 @@ func (e *Engine) RunPromptEvaluation(ctx context.Context, suiteID, promptVersion
 				}
 			}
 		}
-		if recordErr := e.store.RecordEvaluationOutput(ctx, runID, testCase.ID, output, "", time.Since(started), runErr, scores); recordErr != nil {
+		if recordErr := e.store.RecordEvaluationOutputTrace(ctx, runID, testCase.ID, output, "", time.Since(started), runErr, scores,
+			store.EvaluationOutputTrace{ProviderResponseID: candidateTrace.ProviderResponseID, ProviderModelID: candidateTrace.ProviderModelID,
+				InputTokens: candidateTrace.InputTokens, OutputTokens: candidateTrace.OutputTokens}); recordErr != nil {
 			_ = e.store.FinishEvaluationRun(ctx, runID, recordErr)
 			return runID, recordErr
 		}
