@@ -167,16 +167,19 @@ func (r OpinionRecorder) RecordOpinion(ctx context.Context, opinion multiagent.O
 }
 
 type ToolAuthorizationRequest struct {
-	AgentRunID     string
-	ToolKey        string
-	ProjectID      int64
-	AgentType      string
-	WorkflowState  string
-	Input          any
-	RedactedInput  any
-	Shadow         bool
-	ProductionLock bool
-	GateID         string
+	AgentRunID       string
+	ToolKey          string
+	ProjectID        int64
+	AgentType        string
+	WorkflowState    string
+	Input            any
+	RedactedInput    any
+	Shadow           bool
+	ProductionLock   bool
+	GateID           string
+	Actor            string
+	EvidenceVersion  int
+	BudgetMicrounits int64
 }
 
 type ToolAuthorization struct {
@@ -189,25 +192,42 @@ type ToolAuthorization struct {
 
 func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorizationRequest) (ToolAuthorization, error) {
 	var versionID, risk, rule, adapterType string
-	var adapterConfig []byte
+	var adapterConfig, conditionsRaw []byte
 	var requiresGate bool
-	err := s.db.QueryRowContext(ctx, `SELECT tv.id,tv.risk_level,COALESCE(tp.decision,'DENY'),COALESCE(tp.requires_gate,false),tv.adapter_type,tv.adapter_config
+	err := s.db.QueryRowContext(ctx, `SELECT tv.id,tv.risk_level,COALESCE(tp.decision,'DENY'),COALESCE(tp.requires_gate,false),tv.adapter_type,tv.adapter_config,COALESCE(tp.conditions_json,'{}'::jsonb)
 		FROM tool_versions tv JOIN tool_definitions td ON td.id=tv.tool_definition_id
-		LEFT JOIN LATERAL (SELECT decision,requires_gate FROM tool_policies
+		LEFT JOIN LATERAL (SELECT decision,requires_gate,conditions_json FROM tool_policies
 			WHERE tool_version_id=tv.id AND (project_id IS NULL OR project_id=$2)
 			AND (agent_type='*' OR agent_type=$3) AND (workflow_state='*' OR workflow_state=$4)
 			ORDER BY (project_id IS NOT NULL) DESC,(agent_type<>'*') DESC,(workflow_state<>'*') DESC LIMIT 1) tp ON true
 		WHERE td.tool_key=$1 AND tv.status='ACTIVE' ORDER BY tv.version DESC LIMIT 1`, request.ToolKey, request.ProjectID, request.AgentType, request.WorkflowState).
-		Scan(&versionID, &risk, &rule, &requiresGate, &adapterType, &adapterConfig)
+		Scan(&versionID, &risk, &rule, &requiresGate, &adapterType, &adapterConfig, &conditionsRaw)
 	if err == sql.ErrNoRows {
 		return ToolAuthorization{}, ErrNotFound
 	}
 	if err != nil {
 		return ToolAuthorization{}, err
 	}
+	var conditions struct {
+		AllowedActors   []string `json:"allowed_actors"`
+		MinimumEvidence int      `json:"minimum_evidence_version"`
+		MaximumBudget   int64    `json:"maximum_budget_microunits"`
+	}
+	if err := json.Unmarshal(conditionsRaw, &conditions); err != nil {
+		return ToolAuthorization{}, err
+	}
+	actorAllowed := len(conditions.AllowedActors) == 0
+	for _, actor := range conditions.AllowedActors {
+		if actor == "*" || actor == request.Actor {
+			actorAllowed = true
+		}
+	}
+	evidenceOK := conditions.MinimumEvidence == 0 || request.EvidenceVersion >= conditions.MinimumEvidence
+	budgetOK := conditions.MaximumBudget == 0 || request.BudgetMicrounits <= conditions.MaximumBudget
 	decision := tooling.Decide(tooling.Request{ProjectID: request.ProjectID, AgentType: request.AgentType,
 		WorkflowState: request.WorkflowState, RiskLevel: risk, ConfiguredRule: rule, Shadow: request.Shadow,
-		ProductionLock: request.ProductionLock, HasGate: request.GateID != ""})
+		ProductionLock: request.ProductionLock, HasGate: request.GateID != "", Actor: request.Actor,
+		ActorAllowed: actorAllowed, EvidenceOK: evidenceOK, BudgetOK: budgetOK})
 	if requiresGate && request.GateID == "" && decision.Action != "DENY" {
 		decision = tooling.Decision{Action: "REQUIRE_GATE", Reason: "tool policy requires an Engineer Gate", RequiresGate: true}
 	}

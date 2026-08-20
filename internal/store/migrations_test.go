@@ -86,6 +86,18 @@ func TestV3MemoryAndImprovementMigrationContainsGovernedEntities(t *testing.T) {
 	}
 }
 
+func TestV3ReplayabilityMigrationPreservesCaseHistoryAndParameters(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/009_v3_replayability.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	if !strings.Contains(source, "CREATE TABLE IF NOT EXISTS evaluation_case_revisions") ||
+		!strings.Contains(source, "evaluation_runs ADD COLUMN IF NOT EXISTS parameters_json") {
+		t.Fatal("replayability migration is incomplete")
+	}
+}
+
 func TestRetryDelayIsBounded(t *testing.T) {
 	if got := retryDelay(100).Seconds(); got != 300 {
 		t.Fatalf("expected 300 seconds, got %v", got)

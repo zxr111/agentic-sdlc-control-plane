@@ -1252,6 +1252,31 @@ func (s *Store) FinishAgentRun(ctx context.Context, id, status, artifactID strin
 	return s.FinishAgentRunWithTrace(ctx, id, status, artifactID, AgentRunTrace{}, runError)
 }
 
+func (s *Store) RequestAgentRunCancellation(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE agent_runs SET cancel_requested_at=CURRENT_TIMESTAMP
+		WHERE id=$1 AND status IN ('RUNNING','QUEUED') AND cancel_requested_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) AgentRunCancellationRequested(ctx context.Context, id string) (bool, error) {
+	var requested bool
+	err := s.db.QueryRowContext(ctx, `SELECT cancel_requested_at IS NOT NULL FROM agent_runs WHERE id=$1`, id).Scan(&requested)
+	if err == sql.ErrNoRows {
+		return false, ErrNotFound
+	}
+	return requested, err
+}
+
 type AgentRunTrace struct {
 	ProviderResponseID string
 	InputTokens        int64

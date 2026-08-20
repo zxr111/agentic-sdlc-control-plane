@@ -583,6 +583,32 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", nil); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repository.db.ExecContext(ctx, `UPDATE tool_policies SET conditions_json=$1 WHERE tool_version_id=$2`,
+		`{"allowed_actors":["engineer"],"minimum_evidence_version":2,"maximum_budget_microunits":100}`, allowed.ToolVersionID); err != nil {
+		t.Fatal(err)
+	}
+	denied, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS", Actor: "agent",
+		EvidenceVersion: 1, BudgetMicrounits: 101, Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
+	if err != nil || denied.Decision.Action != "DENY" {
+		t.Fatalf("tool conditions were bypassed %#v err=%v", denied, err)
+	}
+	conditioned, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "knowledge.search",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS", Actor: "engineer",
+		EvidenceVersion: 2, BudgetMicrounits: 100, Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
+	if err != nil || conditioned.Decision.Action != "EXECUTE" {
+		t.Fatalf("valid tool conditions rejected %#v err=%v", conditioned, err)
+	}
+	cancellableRunID, err := repository.StartAgentRun(ctx, workflow.ID, "", "CANCELLABLE", "test-model", "cancel-input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.RequestAgentRunCancellation(ctx, cancellableRunID); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled, err := repository.AgentRunCancellationRequested(ctx, cancellableRunID); err != nil || !cancelled {
+		t.Fatalf("agent cancellation requested=%t err=%v", cancelled, err)
+	}
 	var toolStatus string
 	if err := repository.db.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id=$1`, allowed.CallID).Scan(&toolStatus); err != nil || toolStatus != "COMPLETED" {
 		t.Fatalf("tool completion status=%s err=%v", toolStatus, err)
@@ -745,9 +771,21 @@ func TestV3ImprovementCandidatesRequireEvidenceAndHumanReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID, err := repository.StartEvaluationRun(ctx, EvaluationRunInput{SuiteID: suiteID, Shadow: true})
+	if _, err := repository.UpsertEvaluationCase(ctx, suiteID, EvaluationCaseInput{Key: "weak-case", Input: map[string]string{"requirement": "updated"}, Expected: evaluation.Expectations{}, DataSplit: "TEST"}); err != nil {
+		t.Fatal(err)
+	}
+	var caseRevisions int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM evaluation_case_revisions WHERE evaluation_case_id=$1`, caseID).Scan(&caseRevisions); err != nil || caseRevisions != 1 {
+		t.Fatalf("case revisions=%d err=%v", caseRevisions, err)
+	}
+	runID, err := repository.StartEvaluationRun(ctx, EvaluationRunInput{SuiteID: suiteID, Shadow: true,
+		Parameters: map[string]any{"temperature": 0, "seed": 42}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var parameters string
+	if err := repository.db.QueryRowContext(ctx, `SELECT parameters_json::text FROM evaluation_runs WHERE id=$1`, runID).Scan(&parameters); err != nil || !strings.Contains(parameters, `"seed": 42`) {
+		t.Fatalf("evaluation parameters=%s err=%v", parameters, err)
 	}
 	if err := repository.RecordEvaluationOutput(ctx, runID, caseID, json.RawMessage(`{"result":"weak"}`), "", time.Millisecond, nil,
 		[]evaluation.Score{{ScorerKey: "deterministic", ScorerVersion: "1", Dimension: "completeness", Value: 0.4}}); err != nil {

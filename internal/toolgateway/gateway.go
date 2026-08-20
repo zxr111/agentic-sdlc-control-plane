@@ -19,15 +19,18 @@ type Gateway struct {
 }
 
 type Request struct {
-	AgentRunID     string
-	ToolKey        string
-	ProjectID      int64
-	AgentType      string
-	WorkflowState  string
-	Input          json.RawMessage
-	Shadow         bool
-	ProductionLock bool
-	GateID         string
+	AgentRunID       string
+	ToolKey          string
+	ProjectID        int64
+	AgentType        string
+	WorkflowState    string
+	Input            json.RawMessage
+	Shadow           bool
+	ProductionLock   bool
+	GateID           string
+	Actor            string
+	EvidenceVersion  int
+	BudgetMicrounits int64
 }
 
 type knowledgeSearchInput struct {
@@ -48,6 +51,7 @@ func (g Gateway) Execute(ctx context.Context, request Request) (json.RawMessage,
 		AgentRunID: request.AgentRunID, ToolKey: request.ToolKey, ProjectID: request.ProjectID,
 		AgentType: request.AgentType, WorkflowState: request.WorkflowState, Input: decoded,
 		RedactedInput: decoded, Shadow: request.Shadow, ProductionLock: request.ProductionLock, GateID: request.GateID,
+		Actor: request.Actor, EvidenceVersion: request.EvidenceVersion, BudgetMicrounits: request.BudgetMicrounits,
 	})
 	if err != nil {
 		return nil, err

@@ -11,6 +11,10 @@ type Request struct {
 	Shadow         bool
 	ProductionLock bool
 	HasGate        bool
+	Actor          string
+	ActorAllowed   bool
+	EvidenceOK     bool
+	BudgetOK       bool
 }
 
 type Decision struct {
@@ -22,6 +26,15 @@ type Decision struct {
 func Decide(request Request) Decision {
 	risk := strings.ToUpper(request.RiskLevel)
 	rule := strings.ToUpper(request.ConfiguredRule)
+	if !request.ActorAllowed {
+		return Decision{Action: "DENY", Reason: "actor is not allowed by tool policy"}
+	}
+	if !request.EvidenceOK {
+		return Decision{Action: "DENY", Reason: "required evidence version is missing or stale"}
+	}
+	if !request.BudgetOK {
+		return Decision{Action: "DENY", Reason: "tool call exceeds policy budget"}
+	}
 	if request.Shadow && risk != "L0" && risk != "L1" {
 		return Decision{Action: "DENY", Reason: "shadow evaluation cannot use write tools"}
 	}

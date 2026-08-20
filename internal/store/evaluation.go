@@ -55,6 +55,7 @@ type EvaluationRunInput struct {
 	ModelVersionID        string
 	AgentProfileVersionID string
 	Shadow                bool
+	Parameters            any
 }
 
 func nullableUUID(value string) any {
@@ -93,21 +94,48 @@ func (s *Store) UpsertEvaluationCase(ctx context.Context, suiteID string, input 
 		return "", err
 	}
 	id := registryID("evaluation-case", suiteID+":"+input.Key)
-	err = s.db.QueryRowContext(ctx, `INSERT INTO evaluation_cases
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM evaluation_cases WHERE id=$1)`, id).Scan(&exists); err != nil {
+		return "", err
+	}
+	if exists {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO evaluation_case_revisions
+			(id,evaluation_case_id,revision,input_json,expected_json,golden_evidence,data_split)
+			SELECT $1,id,COALESCE((SELECT max(r.revision)+1 FROM evaluation_case_revisions r WHERE r.evaluation_case_id=evaluation_cases.id),1),input_json,expected_json,golden_evidence,data_split
+			FROM evaluation_cases WHERE id=$2`, uuid.NewString(), id); err != nil {
+			return "", err
+		}
+	}
+	err = tx.QueryRowContext(ctx, `INSERT INTO evaluation_cases
 		(id,suite_id,case_key,input_json,expected_json,golden_evidence,data_split)
 		VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (suite_id,case_key) DO UPDATE SET
 		input_json=EXCLUDED.input_json,expected_json=EXCLUDED.expected_json,
 		golden_evidence=EXCLUDED.golden_evidence,data_split=EXCLUDED.data_split RETURNING id`,
 		id, suiteID, input.Key, string(rawInput), string(expected), string(evidence), input.DataSplit).Scan(&id)
-	return id, err
+	if err != nil {
+		return "", err
+	}
+	return id, tx.Commit()
 }
 
 func (s *Store) StartEvaluationRun(ctx context.Context, input EvaluationRunInput) (string, error) {
 	id := uuid.NewString()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO evaluation_runs
-		(id,suite_id,prompt_version_id,model_version_id,agent_profile_version_id,status,shadow,started_at)
-		VALUES ($1,$2,$3,$4,$5,'RUNNING',$6,CURRENT_TIMESTAMP)`, id, input.SuiteID,
-		nullableUUID(input.PromptVersionID), nullableUUID(input.ModelVersionID), nullableUUID(input.AgentProfileVersionID), input.Shadow)
+	parameters, err := json.Marshal(input.Parameters)
+	if err != nil {
+		return "", err
+	}
+	if input.Parameters == nil {
+		parameters = []byte(`{}`)
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO evaluation_runs
+		(id,suite_id,prompt_version_id,model_version_id,agent_profile_version_id,status,shadow,parameters_json,started_at)
+		VALUES ($1,$2,$3,$4,$5,'RUNNING',$6,$7,CURRENT_TIMESTAMP)`, id, input.SuiteID,
+		nullableUUID(input.PromptVersionID), nullableUUID(input.ModelVersionID), nullableUUID(input.AgentProfileVersionID), input.Shadow, string(parameters))
 	return id, err
 }
 
