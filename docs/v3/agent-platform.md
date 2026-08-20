@@ -110,6 +110,8 @@ Skill 是版本化、可评测的领域指令包，包含：
 
 运行时只从项目允许列表中发现 Skill。Skill 内容进入 Context Manifest，不允许从不可信文档动态安装或执行。
 
+Skill 与 Tool Version 的内置内容发生变化时，Bootstrap 只创建 `DRAFT`，不会覆盖当前 `ACTIVE` 版本。候选必须由两个不同评审人提交 Registry Approval，再由未参与评审的发布人激活；Tool Policy 同样以 `CANDIDATE -> ACTIVE/RETIRED` 版本流转并写入独立激活审计。
+
 ## Tool Registry 与 MCP Gateway
 
 工具定义包括：
@@ -145,4 +147,3 @@ CREATED -> CONTEXT_BUILDING -> RUNNING -> VALIDATING
 ```
 
 Run 完成必须同时满足：模型响应完成、JSON Schema 校验通过、引用可验证、工具调用结算完成、使用量已记录。
-

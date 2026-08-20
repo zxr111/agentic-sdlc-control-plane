@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/multiagent"
@@ -105,12 +106,28 @@ func (s *Store) BootstrapGovernance(ctx context.Context, tools []ToolSeed, skill
 		versionMaterial := append(append(append(append([]byte(seed.RiskLevel+":"+seed.AdapterType), 0), seed.InputSchema...), seed.OutputSchema...), adapterConfig...)
 		digest := sha256.Sum256(versionMaterial)
 		hash := hex.EncodeToString(digest[:])
-		versionID := registryID("tool-version", seed.Key+":"+hash)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO tool_versions
-			(id,tool_definition_id,version,status,input_schema,output_schema,risk_level,adapter_type,adapter_config,content_hash)
-			VALUES ($1,$2,1,'ACTIVE',$3,$4,$5,$6,$7,$8) ON CONFLICT (tool_definition_id,version) DO NOTHING`,
-			versionID, definitionID, string(seed.InputSchema), string(seed.OutputSchema), seed.RiskLevel, seed.AdapterType, string(adapterConfig), hash); err != nil {
+		var versionID, activeHash string
+		err = tx.QueryRowContext(ctx, `SELECT id,content_hash FROM tool_versions WHERE tool_definition_id=$1 AND status='ACTIVE'
+			ORDER BY version DESC LIMIT 1`, definitionID).Scan(&versionID, &activeHash)
+		if err == sql.ErrNoRows {
+			versionID = registryID("tool-version", seed.Key+":"+hash)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO tool_versions
+				(id,tool_definition_id,version,status,input_schema,output_schema,risk_level,adapter_type,adapter_config,content_hash)
+				VALUES ($1,$2,1,'ACTIVE',$3,$4,$5,$6,$7,$8)`, versionID, definitionID, string(seed.InputSchema),
+				string(seed.OutputSchema), seed.RiskLevel, seed.AdapterType, string(adapterConfig), hash); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
+		} else if activeHash != hash {
+			candidateID := registryID("tool-version", seed.Key+":"+hash)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO tool_versions
+				(id,tool_definition_id,version,status,input_schema,output_schema,risk_level,adapter_type,adapter_config,content_hash)
+				SELECT $1,$2,COALESCE(MAX(version),0)+1,'DRAFT',$3,$4,$5,$6,$7,$8 FROM tool_versions WHERE tool_definition_id=$2
+				ON CONFLICT DO NOTHING`, candidateID, definitionID, string(seed.InputSchema),
+				string(seed.OutputSchema), seed.RiskLevel, seed.AdapterType, string(adapterConfig), hash); err != nil {
+				return err
+			}
 		}
 		policyID := registryID("tool-policy", seed.Key+":default")
 		decision := seed.DefaultDecision
@@ -139,12 +156,26 @@ func (s *Store) BootstrapGovernance(ctx context.Context, tools []ToolSeed, skill
 		}
 		digest := sha256.Sum256(append(append(append([]byte(seed.Instructions), 0), trigger...), scope...))
 		hash := hex.EncodeToString(digest[:])
-		versionID := registryID("skill-version", seed.Key+":"+hash)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO skill_versions
-			(id,skill_definition_id,version,status,instructions,trigger_rules,scope_json,content_hash)
-			VALUES ($1,$2,1,'ACTIVE',$3,$4,$5,$6) ON CONFLICT (skill_definition_id,version) DO NOTHING`,
-			versionID, definitionID, seed.Instructions, string(trigger), string(scope), hash); err != nil {
+		var activeID, activeHash string
+		err = tx.QueryRowContext(ctx, `SELECT id,content_hash FROM skill_versions WHERE skill_definition_id=$1 AND status='ACTIVE'
+			ORDER BY version DESC LIMIT 1`, definitionID).Scan(&activeID, &activeHash)
+		if err == sql.ErrNoRows {
+			versionID := registryID("skill-version", seed.Key+":"+hash)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO skill_versions
+				(id,skill_definition_id,version,status,instructions,trigger_rules,scope_json,content_hash)
+				VALUES ($1,$2,1,'ACTIVE',$3,$4,$5,$6)`, versionID, definitionID, seed.Instructions, string(trigger), string(scope), hash); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
+		} else if activeHash != hash {
+			candidateID := registryID("skill-version", seed.Key+":"+hash)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO skill_versions
+				(id,skill_definition_id,version,status,instructions,trigger_rules,scope_json,content_hash)
+				SELECT $1,$2,COALESCE(MAX(version),0)+1,'DRAFT',$3,$4,$5,$6 FROM skill_versions WHERE skill_definition_id=$2
+				ON CONFLICT DO NOTHING`, candidateID, definitionID, seed.Instructions, string(trigger), string(scope), hash); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
@@ -187,21 +218,23 @@ type ToolAuthorization struct {
 	ToolVersionID string
 	AdapterType   string
 	AdapterConfig json.RawMessage
+	InputSchema   json.RawMessage
 	Decision      tooling.Decision
 }
 
 func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorizationRequest) (ToolAuthorization, error) {
 	var versionID, risk, rule, adapterType string
-	var adapterConfig, conditionsRaw []byte
+	var adapterConfig, conditionsRaw, inputSchema []byte
 	var requiresGate bool
-	err := s.db.QueryRowContext(ctx, `SELECT tv.id,tv.risk_level,COALESCE(tp.decision,'DENY'),COALESCE(tp.requires_gate,false),tv.adapter_type,tv.adapter_config,COALESCE(tp.conditions_json,'{}'::jsonb)
+	err := s.db.QueryRowContext(ctx, `SELECT tv.id,tv.risk_level,COALESCE(tp.decision,'DENY'),COALESCE(tp.requires_gate,false),tv.adapter_type,tv.adapter_config,COALESCE(tp.conditions_json,'{}'::jsonb),tv.input_schema
 		FROM tool_versions tv JOIN tool_definitions td ON td.id=tv.tool_definition_id
 		LEFT JOIN LATERAL (SELECT decision,requires_gate,conditions_json FROM tool_policies
 			WHERE tool_version_id=tv.id AND (project_id IS NULL OR project_id=$2)
 			AND (agent_type='*' OR agent_type=$3) AND (workflow_state='*' OR workflow_state=$4)
+			AND status='ACTIVE'
 			ORDER BY (project_id IS NOT NULL) DESC,(agent_type<>'*') DESC,(workflow_state<>'*') DESC LIMIT 1) tp ON true
 		WHERE td.tool_key=$1 AND tv.status='ACTIVE' ORDER BY tv.version DESC LIMIT 1`, request.ToolKey, request.ProjectID, request.AgentType, request.WorkflowState).
-		Scan(&versionID, &risk, &rule, &requiresGate, &adapterType, &adapterConfig, &conditionsRaw)
+		Scan(&versionID, &risk, &rule, &requiresGate, &adapterType, &adapterConfig, &conditionsRaw, &inputSchema)
 	if err == sql.ErrNoRows {
 		return ToolAuthorization{}, ErrNotFound
 	}
@@ -224,9 +257,19 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 	}
 	evidenceOK := conditions.MinimumEvidence == 0 || request.EvidenceVersion >= conditions.MinimumEvidence
 	budgetOK := conditions.MaximumBudget == 0 || request.BudgetMicrounits <= conditions.MaximumBudget
+	hasGate := false
+	if request.GateID != "" {
+		var gateRevision int
+		err := s.db.QueryRowContext(ctx, `SELECT g.revision FROM gates g JOIN agent_runs ar ON ar.workflow_id=g.workflow_id
+			WHERE g.id=$1 AND ar.id=$2 AND g.status='APPROVED'`, request.GateID, request.AgentRunID).Scan(&gateRevision)
+		if err != nil && err != sql.ErrNoRows {
+			return ToolAuthorization{}, err
+		}
+		hasGate = err == nil && request.EvidenceVersion == gateRevision
+	}
 	decision := tooling.Decide(tooling.Request{ProjectID: request.ProjectID, AgentType: request.AgentType,
 		WorkflowState: request.WorkflowState, RiskLevel: risk, ConfiguredRule: rule, Shadow: request.Shadow,
-		ProductionLock: request.ProductionLock, HasGate: request.GateID != "", Actor: request.Actor,
+		ProductionLock: request.ProductionLock, HasGate: hasGate, Actor: request.Actor,
 		ActorAllowed: actorAllowed, EvidenceOK: evidenceOK, BudgetOK: budgetOK})
 	if requiresGate && request.GateID == "" && decision.Action != "DENY" {
 		decision = tooling.Decision{Action: "REQUIRE_GATE", Reason: "tool policy requires an Engineer Gate", RequiresGate: true}
@@ -253,7 +296,74 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 		return ToolAuthorization{}, err
 	}
 	return ToolAuthorization{CallID: callID, ToolVersionID: versionID, AdapterType: adapterType,
-		AdapterConfig: json.RawMessage(adapterConfig), Decision: decision}, nil
+		AdapterConfig: json.RawMessage(adapterConfig), InputSchema: json.RawMessage(inputSchema), Decision: decision}, nil
+}
+
+func (s *Store) EnqueueGovernedToolOutbox(ctx context.Context, callID, toolKey, gateID string, input map[string]any) (json.RawMessage, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var workflowID string
+	var projectID, issueIID int64
+	if err := tx.QueryRowContext(ctx, `SELECT ar.workflow_id::text,w.gitlab_project_id,w.issue_iid FROM tool_calls tc
+		JOIN agent_runs ar ON ar.id=tc.agent_run_id JOIN workflows w ON w.id=ar.workflow_id
+		WHERE tc.id=$1 AND tc.policy_decision='OUTBOX' AND tc.status='AUTHORIZED'`, callID).Scan(&workflowID, &projectID, &issueIID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	var messageType string
+	var payload map[string]any
+	switch toolKey {
+	case "gitlab.comment":
+		body, _ := input["body"].(string)
+		marker, _ := input["marker"].(string)
+		if strings.TrimSpace(body) == "" || len(body) > 64*1024 || strings.TrimSpace(marker) == "" {
+			return nil, errors.New("gitlab.comment requires bounded body and marker")
+		}
+		messageType = "gitlab.upsert_note"
+		payload = map[string]any{"project_id": projectID, "issue_iid": issueIID, "marker": marker, "body": body}
+	case "staging.deploy":
+		commitSHA, _ := input["commit_sha"].(string)
+		if len(commitSHA) < 7 || len(commitSHA) > 64 || gateID == "" {
+			return nil, errors.New("staging.deploy requires commit_sha and an approved gate")
+		}
+		var evidenceMatches bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM gates g JOIN artifacts a ON a.id=g.artifact_id
+			WHERE g.id=$1 AND g.workflow_id=$2 AND g.status='APPROVED' AND a.source_hash=$3)`, gateID, workflowID, commitSHA).Scan(&evidenceMatches); err != nil {
+			return nil, err
+		}
+		if !evidenceMatches {
+			return nil, errors.New("staging deploy SHA is not the exact approved evidence")
+		}
+		messageType = "delivery.trigger"
+		payload = map[string]any{"request_id": uuid.NewString(), "action": "staging_deploy", "workflow_id": workflowID,
+			"project_id": projectID, "issue_iid": issueIID, "commit_sha": commitSHA, "environment": "test"}
+	default:
+		return nil, errors.New("tool has no governed outbox adapter")
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO outbox_messages(dedupe_key,message_type,payload_json,last_error)
+		VALUES ($1,$2,$3,'') ON CONFLICT (dedupe_key) DO NOTHING`, "tool-call:"+callID, messageType, string(raw)); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE tool_calls SET status='QUEUED',result_hash=$1,finished_at=CURRENT_TIMESTAMP WHERE id=$2`,
+		hashBytes(raw), callID); err != nil {
+		return nil, err
+	}
+	result, _ := json.Marshal(map[string]any{"status": "QUEUED", "tool_call_id": callID, "message_type": messageType})
+	return result, tx.Commit()
+}
+
+func hashBytes(value []byte) string {
+	digest := sha256.Sum256(value)
+	return hex.EncodeToString(digest[:])
 }
 
 func (s *Store) FinishToolCall(ctx context.Context, callID, status, resultHash string, callError error) error {

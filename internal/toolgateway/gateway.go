@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/tooling"
 )
 
 var ErrDenied = errors.New("tool call denied by policy")
@@ -56,7 +57,17 @@ func (g Gateway) Execute(ctx context.Context, request Request) (json.RawMessage,
 	if err != nil {
 		return nil, err
 	}
+	if err := tooling.ValidateJSON(authorization.InputSchema, decoded); err != nil {
+		return nil, g.fail(ctx, authorization.CallID, err)
+	}
 	if authorization.Decision.Action != "EXECUTE" {
+		if authorization.Decision.Action == "OUTBOX" && authorization.AdapterType == "outbox" {
+			output, err := g.Store.EnqueueGovernedToolOutbox(ctx, authorization.CallID, request.ToolKey, request.GateID, decoded)
+			if err != nil {
+				return nil, g.fail(ctx, authorization.CallID, err)
+			}
+			return output, nil
+		}
 		return nil, ErrDenied
 	}
 	var output json.RawMessage

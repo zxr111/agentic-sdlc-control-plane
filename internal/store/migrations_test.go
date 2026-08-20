@@ -98,6 +98,18 @@ func TestV3ReplayabilityMigrationPreservesCaseHistoryAndParameters(t *testing.T)
 	}
 }
 
+func TestV3RegistryChangeGovernanceMigration(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/010_v3_registry_change_governance.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	if !strings.Contains(source, "CREATE TABLE IF NOT EXISTS registry_change_approvals") ||
+		!strings.Contains(source, "tool_policies ADD COLUMN IF NOT EXISTS status") {
+		t.Fatal("registry change governance migration is incomplete")
+	}
+}
+
 func TestRetryDelayIsBounded(t *testing.T) {
 	if got := retryDelay(100).Seconds(); got != 300 {
 		t.Fatalf("expected 300 seconds, got %v", got)

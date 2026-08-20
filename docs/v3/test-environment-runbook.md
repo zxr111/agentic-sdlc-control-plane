@@ -66,6 +66,8 @@ kubectl -n ai-factory-test port-forward service/ai-sdlc-factory 18080:8080
 6. Engineer Gate 未批准前不得执行写操作；生产部署工具必须拒绝。
 7. 运行候选 Prompt 影子评测，确认没有修改真实 Workflow、Gate、Issue、MR 或部署状态。
 8. 完成可见 Codex 任务、独立质量检查、精确 SHA 合并、测试环境部署、发布门禁和观察阶段。
+9. 晋升候选模型后重启 Dispatcher/Evaluation Worker，确认 Dashboard 路由选择该 Registry 首选模型；执行回滚后确认路由恢复上一版本。模型目录环境变量只能作为 Registry 未启用时的兼容后备。
+10. 修改 Skill、Tool Version 或 Tool Policy，确认两个独立评审和第三方发布人缺一不可，并能在 `registry_activation_audits` 查询到激活记录。
 
 ## 回滚
 

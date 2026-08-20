@@ -45,10 +45,11 @@ func (s *Store) BootstrapRegistry(ctx context.Context, model string, definitions
 		return err
 	}
 	policyID := registryID("model-policy", "default")
+	policyRules, _ := json.Marshal(map[string]any{"strategy": "fixed", "high_risk_fallback": "deny", "preferred_model_version_id": modelID})
 	if _, err := tx.ExecContext(ctx, `INSERT INTO model_policies
 		(id,policy_key,rules_json,fallback_model_version_id,allow_fallback,status)
 		VALUES ($1,'default',$2,$3,false,'ACTIVE') ON CONFLICT (policy_key) DO NOTHING`,
-		policyID, `{"strategy":"fixed","high_risk_fallback":"deny"}`, modelID); err != nil {
+		policyID, string(policyRules), modelID); err != nil {
 		return err
 	}
 	for _, definition := range definitions {

@@ -73,22 +73,40 @@ func main() {
 	if cfg.AgentRuntimeURL != "" {
 		modelURL, modelCredential = cfg.AgentRuntimeURL, cfg.AgentRuntimeSecret
 	}
-	agentClient := agents.New(modelURL, modelCredential, cfg.OpenAIModel)
+	preferredModel := cfg.OpenAIModel
+	var governedModels []routing.Model
+	governedFallback := cfg.ModelFallbackEnabled
+	if cfg.V3.ModelRouter && cfg.V3.Registry {
+		models, preferred, allowFallback, err := repository.ActiveRoutingModels(context.Background())
+		if err != nil {
+			logger.Error("V3 governed model registry load failed", "error", err)
+			os.Exit(1)
+		}
+		governedModels = models
+		if preferred != "" {
+			preferredModel = preferred
+		}
+		governedFallback = allowFallback
+	}
+	agentClient := agents.New(modelURL, modelCredential, preferredModel)
 	if cfg.V3.ModelRouter {
 		health, err := repository.LatestModelHealth(context.Background())
 		if err != nil {
 			logger.Error("V3 model health load failed", "error", err)
 			os.Exit(1)
 		}
-		models := make([]routing.Model, 0, len(cfg.ModelCatalog))
-		for _, model := range cfg.ModelCatalog {
-			if snapshot, ok := health[model.Key]; ok {
-				model.Healthy = snapshot.Healthy
+		models := governedModels
+		if len(models) == 0 {
+			models = make([]routing.Model, 0, len(cfg.ModelCatalog))
+			for _, model := range cfg.ModelCatalog {
+				if snapshot, ok := health[model.Key]; ok {
+					model.Healthy = snapshot.Healthy
+				}
+				models = append(models, routing.Model{ID: model.Key, Key: model.Key, Healthy: model.Healthy,
+					Active: model.Active, Quality: model.Quality, InputCost: model.InputCost, OutputCost: model.OutputCost, Capabilities: model.Capabilities})
 			}
-			models = append(models, routing.Model{ID: model.Key, Key: model.Key, Healthy: model.Healthy,
-				Active: model.Active, Quality: model.Quality, InputCost: model.InputCost, OutputCost: model.OutputCost, Capabilities: model.Capabilities})
 		}
-		agentClient.ConfigureRouting(models, cfg.ModelFallbackEnabled, cfg.ModelBudgetMicrounits)
+		agentClient.ConfigureRouting(models, governedFallback, cfg.ModelBudgetMicrounits)
 	}
 	runner := engine.New(
 		repository,

@@ -290,7 +290,7 @@ func TestPostgresWorkflowArtifactsGateAndOutboxRoundTrip(t *testing.T) {
 	if err := repository.AddAudit(ctx, workflow.ID, "integration.checked", 995, map[string]any{"ok": true}); err != nil {
 		t.Fatal(err)
 	}
-	reconcilable, err := repository.ListReconcilableWorkflows(ctx, 100)
+	reconcilable, err := repository.ListReconcilableWorkflows(ctx, 10000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestPostgresWorkflowArtifactsGateAndOutboxRoundTrip(t *testing.T) {
 		t.Fatal("waiting workflow was not reconcilable")
 	}
 
-	dashboard, err := repository.Dashboard(ctx, 100)
+	dashboard, err := repository.Dashboard(ctx, 10000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,8 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err := repository.ActivatePromptVersion(ctx, "requirement-review", baseline.ID, "integration-reviewer"); err != nil {
 		t.Fatal(err)
 	}
-	modelCandidateID, err := repository.RegisterModelCandidate(ctx, "openai", "test-model-candidate-"+uuid.NewString(), map[string]bool{"structured_output": true}, 10, 20)
+	modelCandidateKey := "test-model-candidate-" + uuid.NewString()
+	modelCandidateID, err := repository.RegisterModelCandidate(ctx, "openai", modelCandidateKey, map[string]bool{"structured_output": true}, 10, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,12 +483,20 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err := repository.PromoteModelVersion(ctx, modelCandidateID, modelRunID, modelBlindID, modelCanaryID, "integration-reviewer"); err != nil {
 		t.Fatal(err)
 	}
+	models, preferred, _, err := repository.ActiveRoutingModels(ctx)
+	if err != nil || preferred != modelCandidateKey || len(models) == 0 {
+		t.Fatalf("promoted model not selected preferred=%s models=%#v err=%v", preferred, models, err)
+	}
 	var modelStatus string
 	if err := repository.db.QueryRowContext(ctx, `SELECT status FROM model_versions WHERE id=$1`, modelCandidateID).Scan(&modelStatus); err != nil || modelStatus != "ACTIVE" {
 		t.Fatalf("model status=%s err=%v", modelStatus, err)
 	}
 	if err := repository.RollbackModelVersion(ctx, modelCandidateID, "integration-reviewer"); err != nil {
 		t.Fatal(err)
+	}
+	_, preferred, _, err = repository.ActiveRoutingModels(ctx)
+	if err != nil || preferred == "" || preferred == modelCandidateKey {
+		t.Fatalf("model rollback did not restore previous route preferred=%s err=%v", preferred, err)
 	}
 	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(time.Now().UnixNano(), 81, "V3 trace"))
 	if err != nil {
@@ -561,8 +570,15 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 			DefaultDecision: "ALLOW", RequiresGate: true, InputSchema: json.RawMessage(`{"type":"object"}`), OutputSchema: json.RawMessage(`{"type":"object"}`)},
 		{Key: "production.deploy", DisplayName: "Production", RiskLevel: "L4", AdapterType: "locked",
 			DefaultDecision: "ALLOW", RequiresGate: true, InputSchema: json.RawMessage(`{"type":"object"}`), OutputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Key: "gitlab.comment", DisplayName: "Comment", RiskLevel: "L2", AdapterType: "outbox",
+			DefaultDecision: "ALLOW", InputSchema: json.RawMessage(`{"type":"object"}`), OutputSchema: json.RawMessage(`{"type":"object"}`)},
 	}, []SkillSeed{{Key: "threat-modeling", DisplayName: "Threat", Instructions: "review threats",
 		TriggerRules: map[string]any{"agent_types": []string{"SECURITY"}}, Scope: map[string]any{"allowlist": true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `UPDATE tool_policies SET conditions_json='{}'::jsonb WHERE tool_version_id IN (
+		SELECT tv.id FROM tool_versions tv JOIN tool_definitions td ON td.id=tv.tool_definition_id
+		WHERE td.tool_key IN ('knowledge.search','staging.deploy','production.deploy','gitlab.comment'))`); err != nil {
 		t.Fatal(err)
 	}
 	skills, err := repository.ActiveSkillsForAgent(ctx, "ARCHITECTURE_SECURITY", []string{"threat-modeling"})
@@ -599,6 +615,21 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err != nil || conditioned.Decision.Action != "EXECUTE" {
 		t.Fatalf("valid tool conditions rejected %#v err=%v", conditioned, err)
 	}
+	comment, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "gitlab.comment",
+		ProjectID: workflow.GitLabProjectID, AgentType: "REQUIREMENT", WorkflowState: "ANALYSIS", Actor: "agent",
+		Input: map[string]any{"marker": "agent-note", "body": "evidence-backed note"}, RedactedInput: map[string]any{"marker": "agent-note", "body": "evidence-backed note"}})
+	if err != nil || comment.Decision.Action != "OUTBOX" {
+		t.Fatalf("comment was not routed through outbox %#v err=%v", comment, err)
+	}
+	if _, err := repository.EnqueueGovernedToolOutbox(ctx, comment.CallID, "gitlab.comment", "",
+		map[string]any{"marker": "agent-note", "body": "evidence-backed note"}); err != nil {
+		t.Fatal(err)
+	}
+	var commentQueued int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM outbox_messages WHERE dedupe_key=$1 AND message_type='gitlab.upsert_note'`,
+		"tool-call:"+comment.CallID).Scan(&commentQueued); err != nil || commentQueued != 1 {
+		t.Fatalf("comment outbox count=%d err=%v", commentQueued, err)
+	}
 	cancellableRunID, err := repository.StartAgentRun(ctx, workflow.ID, "", "CANCELLABLE", "test-model", "cancel-input")
 	if err != nil {
 		t.Fatal(err)
@@ -618,6 +649,31 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		Input: map[string]any{"sha": "abc"}, RedactedInput: map[string]any{"sha": "abc"}})
 	if err != nil || gateRequired.Decision.Action != "REQUIRE_GATE" {
 		t.Fatalf("staging gate bypass %#v err=%v", gateRequired, err)
+	}
+	approvedSHA := "1234567890abcdef1234567890abcdef12345678"
+	artifactID, approvedGateID := uuid.NewString(), uuid.NewString()
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO artifacts(id,workflow_id,artifact_type,artifact_version,source_hash,content_json,markdown,model,prompt_version)
+		VALUES($1,$2,'RELEASE_EVIDENCE',999,$3,'{}','test','test','test')`, artifactID, workflow.ID, approvedSHA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.db.ExecContext(ctx, `INSERT INTO gates(id,workflow_id,gate_type,status,artifact_id,revision,reviewer_ids,opened_at,decided_at,decision_actor,feedback)
+		VALUES($1,$2,'RELEASE','APPROVED',$3,1,'[]',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1,'approved')`, approvedGateID, workflow.ID, artifactID); err != nil {
+		t.Fatal(err)
+	}
+	deploy, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "staging.deploy",
+		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "STAGING", GateID: approvedGateID, EvidenceVersion: 1,
+		Input: map[string]any{"commit_sha": approvedSHA}, RedactedInput: map[string]any{"commit_sha": approvedSHA}})
+	if err != nil || deploy.Decision.Action != "OUTBOX" {
+		t.Fatalf("approved staging deploy not routed through outbox %#v err=%v", deploy, err)
+	}
+	if _, err := repository.EnqueueGovernedToolOutbox(ctx, deploy.CallID, "staging.deploy", approvedGateID,
+		map[string]any{"commit_sha": approvedSHA}); err != nil {
+		t.Fatal(err)
+	}
+	var deployQueued int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM outbox_messages WHERE dedupe_key=$1 AND message_type='delivery.trigger'`,
+		"tool-call:"+deploy.CallID).Scan(&deployQueued); err != nil || deployQueued != 1 {
+		t.Fatalf("deploy outbox count=%d err=%v", deployQueued, err)
 	}
 	production, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "production.deploy",
 		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "RELEASE",
@@ -757,6 +813,70 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	hits, err = repository.SearchKnowledge(ctx, projectID, "idempotency", 0, 10)
 	if err != nil || len(hits) != 0 {
 		t.Fatalf("revoked source remained searchable %#v err=%v", hits, err)
+	}
+}
+
+func TestV3SkillToolAndPolicyPromotionRequireIndependentApprovals(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	toolKey, skillKey := "review.tool."+suffix, "review-skill-"+suffix
+	baseTool := ToolSeed{Key: toolKey, DisplayName: "Review Tool", RiskLevel: "L1", AdapterType: "internal",
+		DefaultDecision: "ALLOW", InputSchema: json.RawMessage(`{"type":"object"}`), OutputSchema: json.RawMessage(`{"type":"object"}`)}
+	baseSkill := SkillSeed{Key: skillKey, DisplayName: "Review Skill", Instructions: "version one",
+		TriggerRules: map[string]any{"agent_types": []string{"REQUIREMENT"}}, Scope: map[string]any{"allowlist": true}}
+	if err := repository.BootstrapGovernance(ctx, []ToolSeed{baseTool}, []SkillSeed{baseSkill}); err != nil {
+		t.Fatal(err)
+	}
+	baseTool.InputSchema = json.RawMessage(`{"type":"object","required":["evidence"]}`)
+	baseSkill.Instructions = "version two with evidence"
+	if err := repository.BootstrapGovernance(ctx, []ToolSeed{baseTool}, []SkillSeed{baseSkill}); err != nil {
+		t.Fatal(err)
+	}
+	var toolCandidateID, skillCandidateID string
+	if err := repository.db.QueryRowContext(ctx, `SELECT tv.id FROM tool_versions tv JOIN tool_definitions td ON td.id=tv.tool_definition_id
+		WHERE td.tool_key=$1 AND tv.status='DRAFT'`, toolKey).Scan(&toolCandidateID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.db.QueryRowContext(ctx, `SELECT sv.id FROM skill_versions sv JOIN skill_definitions sd ON sd.id=sv.skill_definition_id
+		WHERE sd.skill_key=$1 AND sv.status='DRAFT'`, skillKey).Scan(&skillCandidateID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PromoteSkillVersion(ctx, skillKey, skillCandidateID, "publisher"); !errors.Is(err, ErrGovernanceRequired) {
+		t.Fatalf("skill bypassed approvals: %v", err)
+	}
+	for _, candidate := range []struct{ kind, id string }{{"SKILL", skillCandidateID}, {"TOOL_VERSION", toolCandidateID}} {
+		if err := repository.SubmitRegistryChangeApproval(ctx, candidate.kind, candidate.id, "reviewer-a"); err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.SubmitRegistryChangeApproval(ctx, candidate.kind, candidate.id, "reviewer-b"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repository.PromoteSkillVersion(ctx, skillKey, skillCandidateID, "publisher"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PromoteToolVersion(ctx, toolKey, toolCandidateID, "publisher"); err != nil {
+		t.Fatal(err)
+	}
+	policyID, err := repository.CreateToolPolicyCandidate(ctx, ToolPolicyCandidateInput{ToolKey: toolKey, AgentType: "REQUIREMENT",
+		WorkflowState: "ANALYSIS", Decision: "ALLOW", Conditions: map[string]any{"allowed_actors": []string{"agent"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SubmitRegistryChangeApproval(ctx, "TOOL_POLICY", policyID, "reviewer-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SubmitRegistryChangeApproval(ctx, "TOOL_POLICY", policyID, "reviewer-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PromoteToolPolicyCandidate(ctx, policyID, "publisher"); err != nil {
+		t.Fatal(err)
+	}
+	var audits int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM registry_activation_audits
+		WHERE activated_version_id IN ($1,$2,$3) AND actor='publisher'`, skillCandidateID, toolCandidateID, policyID).Scan(&audits); err != nil || audits != 3 {
+		t.Fatalf("registry activation audits=%d err=%v", audits, err)
 	}
 }
 
