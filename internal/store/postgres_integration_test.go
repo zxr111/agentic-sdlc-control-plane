@@ -451,6 +451,44 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err := repository.ActivatePromptVersion(ctx, "requirement-review", baseline.ID, "integration-reviewer"); err != nil {
 		t.Fatal(err)
 	}
+	modelCandidateID, err := repository.RegisterModelCandidate(ctx, "openai", "test-model-candidate-"+uuid.NewString(), map[string]bool{"structured_output": true}, 10, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelRunID, err := repository.StartEvaluationRun(ctx, EvaluationRunInput{SuiteID: suiteID, ModelVersionID: modelCandidateID, Shadow: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinishEvaluationRun(ctx, modelRunID, nil); err != nil {
+		t.Fatal(err)
+	}
+	modelBlindID, err := repository.CreateBlindReview(ctx, baselineRunID, modelRunID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SubmitBlindReview(ctx, modelBlindID, "model-reviewer-a", "RIGHT", "APPROVE", "stable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SubmitBlindReview(ctx, modelBlindID, "model-reviewer-b", "RIGHT", "APPROVE", "cost acceptable"); err != nil {
+		t.Fatal(err)
+	}
+	modelCanaryID, err := repository.CreateCanaryRelease(ctx, "MODEL", modelCandidateID, modelRunID, modelBlindID, []int64{81}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.ApproveCanaryRelease(ctx, modelCanaryID, "integration-reviewer", map[string]any{"error_rate": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.PromoteModelVersion(ctx, modelCandidateID, modelRunID, modelBlindID, modelCanaryID, "integration-reviewer"); err != nil {
+		t.Fatal(err)
+	}
+	var modelStatus string
+	if err := repository.db.QueryRowContext(ctx, `SELECT status FROM model_versions WHERE id=$1`, modelCandidateID).Scan(&modelStatus); err != nil || modelStatus != "ACTIVE" {
+		t.Fatalf("model status=%s err=%v", modelStatus, err)
+	}
+	if err := repository.RollbackModelVersion(ctx, modelCandidateID, "integration-reviewer"); err != nil {
+		t.Fatal(err)
+	}
 	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(time.Now().UnixNano(), 81, "V3 trace"))
 	if err != nil {
 		t.Fatal(err)
@@ -480,6 +518,10 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		JOIN model_versions mv ON mv.id=mhe.model_version_id WHERE mv.model_key='test-model'
 		ORDER BY mhe.observed_at DESC LIMIT 1`).Scan(&healthy); err != nil || !healthy {
 		t.Fatalf("model health event healthy=%t err=%v", healthy, err)
+	}
+	healthSnapshot, err := repository.LatestModelHealth(ctx)
+	if err != nil || !healthSnapshot["test-model"].Healthy {
+		t.Fatalf("latest model health=%#v err=%v", healthSnapshot, err)
 	}
 	var gotManifest, responseID, finishReason, profileVersionID, promptVersionID, modelVersionID, providerModelID string
 	var inputTokens, cachedTokens, outputTokens, reasoningTokens, latencyMS int64

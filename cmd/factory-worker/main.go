@@ -71,8 +71,16 @@ func main() {
 	}
 	agentClient := agents.New(cfg.OpenAIAPIURL, cfg.OpenAIAPIKey, cfg.OpenAIModel)
 	if cfg.V3.ModelRouter {
+		health, err := repository.LatestModelHealth(context.Background())
+		if err != nil {
+			logger.Error("V3 model health load failed", "error", err)
+			os.Exit(1)
+		}
 		models := make([]routing.Model, 0, len(cfg.ModelCatalog))
 		for _, model := range cfg.ModelCatalog {
+			if snapshot, ok := health[model.Key]; ok {
+				model.Healthy = snapshot.Healthy
+			}
 			models = append(models, routing.Model{ID: model.Key, Key: model.Key, Healthy: model.Healthy,
 				Active: model.Active, Quality: model.Quality, InputCost: model.InputCost, OutputCost: model.OutputCost, Capabilities: model.Capabilities})
 		}
