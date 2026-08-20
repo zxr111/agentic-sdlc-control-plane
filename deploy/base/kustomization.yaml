@@ -4,6 +4,9 @@ resources:
   - service-account.yaml
   - api.yaml
   - worker.yaml
+  - agent-runtime.yaml
+  - evaluation-worker.yaml
+  - knowledge-indexer.yaml
   - service.yaml
   - migration-job.yaml
   - network-policy.yaml

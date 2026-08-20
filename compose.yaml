@@ -84,6 +84,44 @@ services:
     environment:
       <<: *factory-environment
       WORKER_ID: compose-worker
+      WORKER_EVENT_TYPES: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  agent-runtime:
+    <<: *factory-service
+    command: ["/usr/local/bin/factory-worker"]
+    environment:
+      <<: *factory-environment
+      WORKER_ID: compose-agent-runtime
+      WORKER_EVENT_TYPES: workflow.analyze_requirement,workflow.generate_plans,workflow.generate_architecture
+      WORKER_OUTBOX_ENABLED: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  evaluation-worker:
+    <<: *factory-service
+    command: ["/usr/local/bin/factory-worker"]
+    environment:
+      <<: *factory-environment
+      WORKER_ID: compose-evaluation-worker
+      WORKER_EVENT_TYPES: evaluation.run
+      WORKER_OUTBOX_ENABLED: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  knowledge-indexer:
+    image: ai-sdlc-factory:local
+    build:
+      context: .
+    command: ["/usr/local/bin/factory-knowledge-indexer"]
+    environment:
+      DATABASE_URL: postgres://factory:factory@postgres:5432/ai_sdlc_factory_test?sslmode=disable
+      KNOWLEDGE_INDEX_INTERVAL: 10s
+    restart: unless-stopped
     depends_on:
       migrate:
         condition: service_completed_successfully

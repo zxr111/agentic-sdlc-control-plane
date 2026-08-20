@@ -31,6 +31,8 @@ type Config struct {
 	DeliveryTriggerURL    string
 	DeliveryTriggerToken  string
 	WorkerID              string
+	WorkerEventTypes      []string
+	WorkerOutboxEnabled   bool
 	WorkerPollInterval    time.Duration
 	LeaseDuration         time.Duration
 	ReconcileInterval     time.Duration
@@ -79,6 +81,8 @@ func Load() (Config, error) {
 		GitLabWebhookSecret:   os.Getenv("GITLAB_WEBHOOK_SECRET"),
 		CallbackSharedSecret:  os.Getenv("CALLBACK_SHARED_SECRET"),
 		WorkerID:              env("WORKER_ID", hostname()),
+		WorkerEventTypes:      csvEnv("WORKER_EVENT_TYPES"),
+		WorkerOutboxEnabled:   boolEnv("WORKER_OUTBOX_ENABLED", true),
 		WorkerPollInterval:    durationEnv("WORKER_POLL_INTERVAL", time.Second),
 		LeaseDuration:         durationEnv("WORKER_LEASE_DURATION", 2*time.Minute),
 		ReconcileInterval:     durationEnv("RECONCILE_INTERVAL", 10*time.Minute),
@@ -201,6 +205,24 @@ func env(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func csvEnv(name string) []string {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" && !seen[part] {
+			seen[part] = true
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 func durationEnv(name string, fallback time.Duration) time.Duration {

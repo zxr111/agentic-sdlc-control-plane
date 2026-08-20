@@ -15,6 +15,7 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/confluence"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/delivery"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/engine"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/routing"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
@@ -110,7 +111,13 @@ func run(ctx context.Context, cfg config.Config, repository *store.Store, runner
 		default:
 		}
 
-		message, err := repository.ClaimOutbox(ctx, cfg.WorkerID, cfg.LeaseDuration)
+		var message *domain.OutboxMessage
+		var err error
+		if cfg.WorkerOutboxEnabled {
+			message, err = repository.ClaimOutbox(ctx, cfg.WorkerID, cfg.LeaseDuration)
+		} else {
+			err = store.ErrNotFound
+		}
 		if err == nil {
 			externalID, deliveryErr := runner.DeliverOutbox(ctx, *message)
 			if deliveryErr != nil {
@@ -128,7 +135,7 @@ func run(ctx context.Context, cfg config.Config, repository *store.Store, runner
 			continue
 		}
 
-		event, err := repository.ClaimEvent(ctx, cfg.WorkerID, cfg.LeaseDuration)
+		event, err := repository.ClaimEventTypes(ctx, cfg.WorkerID, cfg.LeaseDuration, cfg.WorkerEventTypes)
 		if err == nil {
 			handleErr := runner.HandleEvent(ctx, *event)
 			if handleErr != nil {

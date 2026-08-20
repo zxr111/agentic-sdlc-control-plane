@@ -146,6 +146,10 @@ func (s *Store) EnqueueEvent(ctx context.Context, dedupeKey, eventType string, p
 }
 
 func (s *Store) ClaimEvent(ctx context.Context, workerID string, lease time.Duration) (*domain.QueueEvent, error) {
+	return s.ClaimEventTypes(ctx, workerID, lease, nil)
+}
+
+func (s *Store) ClaimEventTypes(ctx context.Context, workerID string, lease time.Duration, eventTypes []string) (*domain.QueueEvent, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
@@ -157,7 +161,8 @@ func (s *Store) ClaimEvent(ctx context.Context, workerID string, lease time.Dura
 	}
 	row := tx.QueryRowContext(ctx, `SELECT id,dedupe_key,event_type,payload_json,attempts,available_at,lease_until
 		FROM event_queue WHERE status='READY' AND available_at <= CURRENT_TIMESTAMP
-		ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`)
+		AND (COALESCE(cardinality($1::text[]),0)=0 OR event_type=ANY($1::text[]))
+		ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`, eventTypes)
 	var event domain.QueueEvent
 	var leaseUntil sql.NullTime
 	if err := row.Scan(&event.ID, &event.DedupeKey, &event.Type, &event.Payload, &event.Attempts, &event.AvailableAt, &leaseUntil); err != nil {

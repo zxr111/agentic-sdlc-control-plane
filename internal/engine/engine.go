@@ -115,6 +115,11 @@ type GeneratePlansEvent struct {
 	GateID     string `json:"gate_id"`
 }
 
+type AnalyzeRequirementEvent struct {
+	WorkflowID string `json:"workflow_id"`
+	Feedback   string `json:"feedback,omitempty"`
+}
+
 type GenerateArchitectureEvent struct {
 	WorkflowID string `json:"workflow_id"`
 	Feedback   string `json:"feedback,omitempty"`
@@ -157,6 +162,24 @@ func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error
 			return err
 		}
 		return e.generatePlans(ctx, payload)
+	case "workflow.analyze_requirement":
+		var payload AnalyzeRequirementEvent
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		workflow, err := e.store.GetWorkflow(ctx, payload.WorkflowID)
+		if err != nil {
+			return err
+		}
+		snapshots, err := e.store.LatestSnapshots(ctx, workflow.ID)
+		if err != nil {
+			return err
+		}
+		project, ok := e.projects[workflow.GitLabProjectID]
+		if !ok {
+			return fmt.Errorf("project %d is not configured", workflow.GitLabProjectID)
+		}
+		return e.publishRequirementGate(ctx, workflow, project, snapshots, payload.Feedback)
 	case "workflow.generate_architecture":
 		var payload GenerateArchitectureEvent
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -346,6 +369,10 @@ func (e *Engine) handleIssueChanged(ctx context.Context, event webhook.IssueChan
 	}
 	workflow.State = domain.StateRequirementAnalysis
 	workflow.SourceHash = sourceHash
+	if e.v3.Registry {
+		return e.store.EnqueueEvent(ctx, "analyze-requirement:"+workflow.ID+":"+sourceHash, "workflow.analyze_requirement",
+			AnalyzeRequirementEvent{WorkflowID: workflow.ID}, time.Now().UTC())
+	}
 	return e.publishRequirementGate(ctx, workflow, project, snapshots, "")
 }
 

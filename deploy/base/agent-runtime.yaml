@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ai-sdlc-factory-worker
+  name: ai-sdlc-factory-agent-runtime
 spec:
   replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: ai-sdlc-factory
-      app.kubernetes.io/component: worker
+      app.kubernetes.io/component: agent-runtime
   template:
     metadata:
       labels:
         app.kubernetes.io/name: ai-sdlc-factory
-        app.kubernetes.io/component: worker
+        app.kubernetes.io/component: agent-runtime
     spec:
       serviceAccountName: ai-sdlc-factory
       imagePullSecrets:
@@ -22,7 +22,7 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: worker
+        - name: agent-runtime
           image: ai-sdlc-factory:latest
           imagePullPolicy: Always
           command: ["/usr/local/bin/factory-worker"]
@@ -32,7 +32,9 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: WORKER_EVENT_TYPES
-              value: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile
+              value: workflow.analyze_requirement,workflow.generate_plans,workflow.generate_architecture
+            - name: WORKER_OUTBOX_ENABLED
+              value: "false"
           envFrom:
             - configMapRef:
                 name: ai-sdlc-factory-config
@@ -40,8 +42,8 @@ spec:
                 name: ai-sdlc-factory-secrets
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 250m
+              memory: 256Mi
             limits:
               cpu: "2"
               memory: 1Gi

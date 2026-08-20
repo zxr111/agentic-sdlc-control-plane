@@ -66,3 +66,51 @@ patches:
               items:
                 - key: projects.json
                   path: projects.json
+  - target:
+      kind: Deployment
+      name: ai-sdlc-factory-agent-runtime
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: FACTORY_PROJECTS_FILE
+          value: /etc/factory/projects.json
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: project-config
+            mountPath: /etc/factory
+            readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: project-config
+            configMap:
+              name: ai-sdlc-factory-config
+              items:
+                - key: projects.json
+                  path: projects.json
+  - target:
+      kind: Deployment
+      name: ai-sdlc-factory-evaluation-worker
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: FACTORY_PROJECTS_FILE
+          value: /etc/factory/projects.json
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: project-config
+            mountPath: /etc/factory
+            readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: project-config
+            configMap:
+              name: ai-sdlc-factory-config
+              items:
+                - key: projects.json
+                  path: projects.json

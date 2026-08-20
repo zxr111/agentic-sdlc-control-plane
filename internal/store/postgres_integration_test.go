@@ -4,6 +4,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -79,6 +81,35 @@ func TestQueueClaimsAreExclusive(t *testing.T) {
 	}
 	if claims != 1 || empty != 1 {
 		t.Fatalf("claims=%d empty=%d", claims, empty)
+	}
+}
+
+func TestClaimEventTypesKeepsRuntimeQueuesIsolated(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	if _, err := repository.db.ExecContext(ctx, `DELETE FROM event_queue`); err != nil {
+		t.Fatal(err)
+	}
+	suffix := uuid.NewString()
+	if err := repository.EnqueueEvent(ctx, "agent:"+suffix, "workflow.generate_architecture", map[string]string{"id": suffix}, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.EnqueueEvent(ctx, "eval:"+suffix, "evaluation.run", map[string]string{"id": suffix}, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	event, err := repository.ClaimEventTypes(ctx, "agent-runtime", time.Minute, []string{"workflow.generate_architecture"})
+	if err != nil || event.Type != "workflow.generate_architecture" {
+		t.Fatalf("agent event=%#v err=%v", event, err)
+	}
+	if err := repository.CompleteEvent(ctx, event.ID); err != nil {
+		t.Fatal(err)
+	}
+	event, err = repository.ClaimEventTypes(ctx, "evaluation-worker", time.Minute, []string{"evaluation.run"})
+	if err != nil || event.Type != "evaluation.run" {
+		t.Fatalf("evaluation event=%#v err=%v", event, err)
+	}
+	if err := repository.CompleteEvent(ctx, event.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -616,6 +647,49 @@ func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	hits, err = repository.SearchKnowledge(ctx, projectID, "idempotency", 0, 10)
 	if err != nil || len(hits) != 0 {
 		t.Fatalf("revoked source remained searchable %#v err=%v", hits, err)
+	}
+}
+
+func TestKnowledgeIndexerFindsAndClearsSnapshotBacklog(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	projectID := time.Now().UnixNano()
+	workflow, err := repository.GetOrCreateWorkflow(ctx, domain.NewWorkflow(projectID, 91, "Indexer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageID := "page-" + uuid.NewString()
+	content := "recoverable indexed architecture evidence"
+	digest := sha256.Sum256([]byte(content))
+	if err := repository.SaveSnapshot(ctx, domain.Snapshot{ID: uuid.NewString(), WorkflowID: workflow.ID, ConfluencePageID: pageID,
+		Version: 1, Title: "Recovery", URL: "https://example.test/" + pageID, UpdatedAt: time.Now().UTC().Format(time.RFC3339), ContentHash: hex.EncodeToString(digest[:]), NormalizedText: content}); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := repository.PendingKnowledgeSources(ctx, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected *KnowledgeSource
+	for index := range sources {
+		if sources[index].ProjectID == projectID && sources[index].SourceKey == pageID {
+			selected = &sources[index]
+			break
+		}
+	}
+	if selected == nil {
+		t.Fatalf("snapshot source missing from backlog %#v", sources)
+	}
+	if _, created, err := repository.IngestKnowledge(ctx, *selected); err != nil || !created {
+		t.Fatalf("index created=%t err=%v", created, err)
+	}
+	sources, err = repository.PendingKnowledgeSources(ctx, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range sources {
+		if source.ProjectID == projectID && source.SourceKey == pageID {
+			t.Fatal("indexed snapshot remained in backlog")
+		}
 	}
 }
 
