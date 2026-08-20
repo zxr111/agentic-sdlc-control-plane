@@ -32,7 +32,19 @@ type Config struct {
 	LeaseDuration        time.Duration
 	ReconcileInterval    time.Duration
 	MaxAttempts          int
+	V3                   V3Features
 	Projects             map[int64]domain.ProjectConfig
+}
+
+type V3Features struct {
+	Registry        bool
+	ContextManifest bool
+	Evaluation      bool
+	RAG             bool
+	Memory          bool
+	MultiAgent      bool
+	ToolGateway     bool
+	ModelRouter     bool
 }
 
 func Load() (Config, error) {
@@ -56,6 +68,16 @@ func Load() (Config, error) {
 		LeaseDuration:        durationEnv("WORKER_LEASE_DURATION", 2*time.Minute),
 		ReconcileInterval:    durationEnv("RECONCILE_INTERVAL", 10*time.Minute),
 		MaxAttempts:          intEnv("MAX_ATTEMPTS", 8),
+		V3: V3Features{
+			Registry:        boolEnv("V3_REGISTRY_ENABLED", false),
+			ContextManifest: boolEnv("V3_CONTEXT_MANIFEST_ENABLED", false),
+			Evaluation:      boolEnv("V3_EVALUATION_ENABLED", false),
+			RAG:             boolEnv("V3_RAG_ENABLED", false),
+			Memory:          boolEnv("V3_MEMORY_ENABLED", false),
+			MultiAgent:      boolEnv("V3_MULTI_AGENT_ENABLED", false),
+			ToolGateway:     boolEnv("V3_TOOL_GATEWAY_ENABLED", false),
+			ModelRouter:     boolEnv("V3_MODEL_ROUTER_ENABLED", false),
+		},
 	}
 
 	projects, err := loadProjects()
@@ -156,6 +178,18 @@ func intEnv(name string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func boolEnv(name string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
 	if err != nil {
 		return fallback
 	}

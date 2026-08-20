@@ -37,6 +37,31 @@ func TestFullLifecycleMigrationContainsNoRunnerLeaseModel(t *testing.T) {
 	}
 }
 
+func TestV3AgentPlatformMigrationContainsGovernedEntities(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/003_v3_agent_platform.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, table := range []string{
+		"prompt_definitions", "prompt_versions", "model_providers", "model_versions", "model_policies",
+		"agent_profiles", "agent_profile_versions", "skill_definitions", "skill_versions",
+		"context_manifests", "context_entries", "knowledge_documents", "knowledge_versions", "knowledge_chunks",
+		"retrieval_runs", "retrieval_results", "project_memories", "tool_definitions", "tool_versions",
+		"tool_policies", "tool_calls", "agent_steps", "agent_opinions", "evaluation_suites",
+		"evaluation_cases", "evaluation_runs", "evaluation_outputs", "evaluation_scores", "evaluation_comparisons",
+	} {
+		if !strings.Contains(source, "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("missing V3 table %s", table)
+		}
+	}
+	for _, column := range []string{"agent_profile_version_id", "prompt_version_id", "model_version_id", "context_manifest_id", "input_tokens", "output_tokens", "latency_ms"} {
+		if !strings.Contains(source, "agent_runs ADD COLUMN IF NOT EXISTS "+column) {
+			t.Fatalf("missing agent run observability column %s", column)
+		}
+	}
+}
+
 func TestRetryDelayIsBounded(t *testing.T) {
 	if got := retryDelay(100).Seconds(); got != 300 {
 		t.Fatalf("expected 300 seconds, got %v", got)
