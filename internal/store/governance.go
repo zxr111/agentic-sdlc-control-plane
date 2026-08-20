@@ -169,3 +169,23 @@ func (s *Store) AuthorizeToolCall(ctx context.Context, request ToolAuthorization
 	}
 	return ToolAuthorization{CallID: callID, ToolVersionID: versionID, Decision: decision}, nil
 }
+
+func (s *Store) FinishToolCall(ctx context.Context, callID, status, resultHash string, callError error) error {
+	errorSummary := ""
+	if callError != nil {
+		errorSummary = redactError(callError)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE tool_calls SET status=$1,result_hash=$2,error_summary=$3,
+		finished_at=CURRENT_TIMESTAMP WHERE id=$4`, status, resultHash, errorSummary, callID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return ErrNotFound
+	}
+	return nil
+}

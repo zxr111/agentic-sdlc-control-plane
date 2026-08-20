@@ -1271,13 +1271,28 @@ func (s *Store) FinishAgentRunWithTrace(ctx context.Context, id, status, artifac
 		return err
 	}
 	if trace.SelectedModelKey != "" {
-		_, err = s.db.ExecContext(ctx, `INSERT INTO model_route_decisions
+		tx, txErr := s.db.BeginTx(ctx, nil)
+		if txErr != nil {
+			return txErr
+		}
+		defer tx.Rollback()
+		_, err = tx.ExecContext(ctx, `INSERT INTO model_route_decisions
 			(id,workflow_id,agent_run_id,requested_model_version_id,selected_model_version_id,risk_level,fallback,estimated_cost_microunits,reason)
 			SELECT $1,ar.workflow_id,ar.id,requested.id,selected.id,$2,$3,$4,$5 FROM agent_runs ar
 			JOIN model_versions selected ON selected.model_key=$6 AND selected.status='ACTIVE'
 			LEFT JOIN model_versions requested ON requested.model_key=ar.model AND requested.status='ACTIVE'
 			WHERE ar.id=$7 ORDER BY selected.created_at DESC LIMIT 1`, uuid.NewString(), trace.RiskLevel, trace.Fallback,
 			trace.EstimatedCost, trace.RouteReason, trace.SelectedModelKey, id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO model_health_events(id,model_version_id,healthy,latency_ms,error_summary)
+			SELECT $1,id,$2,$3,$4 FROM model_versions WHERE model_key=$5 AND status='ACTIVE'
+			ORDER BY created_at DESC LIMIT 1`, uuid.NewString(), runError == nil, trace.LatencyMS, errorSummary, trace.SelectedModelKey)
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	return err
 }

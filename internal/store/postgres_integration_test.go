@@ -404,6 +404,12 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err := repository.FinishAgentRunWithTrace(ctx, runID, "COMPLETED", "", trace, nil); err != nil {
 		t.Fatal(err)
 	}
+	var healthy bool
+	if err := repository.db.QueryRowContext(ctx, `SELECT healthy FROM model_health_events mhe
+		JOIN model_versions mv ON mv.id=mhe.model_version_id WHERE mv.model_key='test-model'
+		ORDER BY mhe.observed_at DESC LIMIT 1`).Scan(&healthy); err != nil || !healthy {
+		t.Fatalf("model health event healthy=%t err=%v", healthy, err)
+	}
 	var gotManifest, responseID, finishReason, profileVersionID, promptVersionID, modelVersionID string
 	var inputTokens, cachedTokens, outputTokens, reasoningTokens, latencyMS int64
 	if err := repository.db.QueryRowContext(ctx, `SELECT context_manifest_id,provider_response_id,input_tokens,
@@ -444,6 +450,14 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		Input: map[string]any{"query": "payment"}, RedactedInput: map[string]any{"query": "payment"}})
 	if err != nil || allowed.Decision.Action != "EXECUTE" {
 		t.Fatalf("read tool not authorized %#v err=%v", allowed, err)
+	}
+	if err := repository.FinishToolCall(ctx, allowed.CallID, "COMPLETED",
+		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", nil); err != nil {
+		t.Fatal(err)
+	}
+	var toolStatus string
+	if err := repository.db.QueryRowContext(ctx, `SELECT status FROM tool_calls WHERE id=$1`, allowed.CallID).Scan(&toolStatus); err != nil || toolStatus != "COMPLETED" {
+		t.Fatalf("tool completion status=%s err=%v", toolStatus, err)
 	}
 	gateRequired, err := repository.AuthorizeToolCall(ctx, ToolAuthorizationRequest{AgentRunID: runID, ToolKey: "staging.deploy",
 		ProjectID: workflow.GitLabProjectID, AgentType: "RELEASE", WorkflowState: "STAGING",

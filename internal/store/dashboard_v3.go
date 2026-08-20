@@ -137,7 +137,7 @@ func (s *Store) loadDashboardV3(ctx context.Context, result *DashboardV3, limit 
 		(SELECT count(*) FROM knowledge_documents WHERE status='ACTIVE'),
 		(SELECT count(*) FROM knowledge_versions WHERE status='ACTIVE'),
 		(SELECT count(*) FROM knowledge_chunks),
-		(SELECT count(*) FROM project_memories WHERE status='APPROVED' AND (expires_at IS NULL OR expires_at>now())),
+		(SELECT count(*) FROM project_memories WHERE status='ACTIVE' AND (expires_at IS NULL OR expires_at>now())),
 		(SELECT count(*) FROM project_memories WHERE status='CANDIDATE')`).Scan(&result.Knowledge.ActiveDocuments,
 		&result.Knowledge.ActiveVersions, &result.Knowledge.Chunks, &result.Knowledge.ApprovedMemories,
 		&result.Knowledge.CandidateMemories); err != nil {
