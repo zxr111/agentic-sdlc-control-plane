@@ -169,6 +169,58 @@ func (s *Store) AgentRunContextTokenLimit(ctx context.Context, agentRunID string
 	return limit, nil
 }
 
+type AgentRunGenerationPolicy struct {
+	MaxOutputTokens int
+	ReasoningEffort string
+}
+
+// AgentRunGenerationPolicy returns the immutable model-generation budget from
+// the profile version bound to this run.
+func (s *Store) AgentRunGenerationPolicy(ctx context.Context, agentRunID string) (AgentRunGenerationPolicy, error) {
+	var policy AgentRunGenerationPolicy
+	err := s.db.QueryRowContext(ctx, `SELECT
+		COALESCE((apv.budget_json->>'max_output_tokens')::int,12000),
+		COALESCE(NULLIF(apv.budget_json->>'reasoning_effort',''),'medium')
+		FROM agent_runs ar JOIN agent_profile_versions apv ON apv.id=ar.agent_profile_version_id
+		WHERE ar.id=$1`, agentRunID).Scan(&policy.MaxOutputTokens, &policy.ReasoningEffort)
+	if err == sql.ErrNoRows {
+		return AgentRunGenerationPolicy{}, ErrNotFound
+	}
+	if err != nil {
+		return AgentRunGenerationPolicy{}, err
+	}
+	return validateGenerationPolicy(policy)
+}
+
+func (s *Store) ActiveProfileGenerationPolicy(ctx context.Context, profileKey string) (AgentRunGenerationPolicy, error) {
+	var policy AgentRunGenerationPolicy
+	err := s.db.QueryRowContext(ctx, `SELECT
+		COALESCE((apv.budget_json->>'max_output_tokens')::int,12000),
+		COALESCE(NULLIF(apv.budget_json->>'reasoning_effort',''),'medium')
+		FROM agent_profile_versions apv JOIN agent_profiles ap ON ap.id=apv.agent_profile_id
+		WHERE ap.profile_key=LOWER($1) AND apv.status='ACTIVE' ORDER BY apv.version DESC LIMIT 1`, profileKey).
+		Scan(&policy.MaxOutputTokens, &policy.ReasoningEffort)
+	if err == sql.ErrNoRows {
+		return AgentRunGenerationPolicy{}, ErrNotFound
+	}
+	if err != nil {
+		return AgentRunGenerationPolicy{}, err
+	}
+	return validateGenerationPolicy(policy)
+}
+
+func validateGenerationPolicy(policy AgentRunGenerationPolicy) (AgentRunGenerationPolicy, error) {
+	if policy.MaxOutputTokens <= 0 || policy.MaxOutputTokens > 100000 {
+		return AgentRunGenerationPolicy{}, errors.New("Agent Profile has an invalid output token limit")
+	}
+	switch policy.ReasoningEffort {
+	case "low", "medium", "high":
+	default:
+		return AgentRunGenerationPolicy{}, errors.New("Agent Profile has an invalid reasoning effort")
+	}
+	return policy, nil
+}
+
 func (s *Store) BeginAgentRunExecution(ctx context.Context, agentRunID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

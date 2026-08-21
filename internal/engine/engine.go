@@ -387,7 +387,12 @@ func (e *Engine) runtimePromptForRun(ctx context.Context, runID, fallbackLabel s
 	if err != nil {
 		return agents.RuntimePrompt{}, "", fmt.Errorf("resolve Agent Run prompt: %w", err)
 	}
-	return agents.RuntimePrompt{Instructions: prompt.Content, OutputSchema: prompt.OutputSchema},
+	policy, err := e.store.AgentRunGenerationPolicy(ctx, runID)
+	if err != nil {
+		return agents.RuntimePrompt{}, "", fmt.Errorf("resolve Agent Run generation policy: %w", err)
+	}
+	return agents.RuntimePrompt{Instructions: prompt.Content, OutputSchema: prompt.OutputSchema,
+			MaxOutputTokens: policy.MaxOutputTokens, ReasoningEffort: policy.ReasoningEffort},
 		fmt.Sprintf("%s-v%d", prompt.PromptKey, prompt.Version), nil
 }
 
@@ -465,7 +470,12 @@ func (e *Engine) runGovernedReview(ctx context.Context, workflow domain.Workflow
 		if err != nil {
 			return multiagent.Synthesis{}, err
 		}
-		prompts[role] = agents.RolePrompt{Instructions: runtime.Content, Schema: runtime.OutputSchema}
+		policy, err := e.store.ActiveProfileGenerationPolicy(ctx, "multiagent_"+strings.ToLower(role))
+		if err != nil {
+			return multiagent.Synthesis{}, fmt.Errorf("resolve %s profile budget: %w", role, err)
+		}
+		prompts[role] = agents.RolePrompt{Instructions: runtime.Content, Schema: runtime.OutputSchema,
+			MaxOutputTokens: policy.MaxOutputTokens, ReasoningEffort: policy.ReasoningEffort}
 	}
 	runner := agents.NewGovernedMultiAgentRunnerWithPrompts(e.agents, observer, prompts)
 	_, synthesis, err := multiagent.New(runner).Execute(ctx, multiagent.Input{WorkflowID: workflow.ID, AgentType: stage,

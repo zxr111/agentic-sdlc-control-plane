@@ -51,6 +51,9 @@ func TestGovernedMultiAgentRunnerUsesIndependentCalls(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			return nil, err
 		}
+		if body["max_output_tokens"] != float64(2048) || body["reasoning"].(map[string]any)["effort"] != "high" {
+			t.Fatalf("multi-agent profile budget was not applied: %#v", body)
+		}
 		format := body["text"].(map[string]any)["format"].(map[string]any)["name"].(string)
 		payload := ""
 		if format == "agent_synthesis_v1" {
@@ -69,7 +72,12 @@ func TestGovernedMultiAgentRunnerUsesIndependentCalls(t *testing.T) {
 	client := New("https://api.example.test", "key", "model")
 	client.http.Transport = transport
 	observer := &observerStub{runs: map[string]string{}}
-	runner := NewGovernedMultiAgentRunner(client, observer)
+	runner := NewGovernedMultiAgentRunnerWithPrompts(client, observer, map[string]RolePrompt{
+		multiagent.RolePrimary:  {Instructions: "PRIMARY", Schema: opinionSchema, MaxOutputTokens: 2048, ReasoningEffort: "high"},
+		multiagent.RoleCritic:   {Instructions: "CRITIC", Schema: opinionSchema, MaxOutputTokens: 2048, ReasoningEffort: "high"},
+		multiagent.RoleSecurity: {Instructions: "SECURITY_RELIABILITY", Schema: opinionSchema, MaxOutputTokens: 2048, ReasoningEffort: "high"},
+		multiagent.RoleJudge:    {Instructions: "JUDGE", Schema: synthesisSchema, MaxOutputTokens: 2048, ReasoningEffort: "high"},
+	})
 	_, synthesis, err := multiagent.New(runner).Execute(context.Background(), multiagent.Input{WorkflowID: "w", AgentType: "REQUIREMENT", AuthoritativeText: "source", PrimaryArtifact: []byte(`{}`)}, observer)
 	if err != nil {
 		t.Fatal(err)

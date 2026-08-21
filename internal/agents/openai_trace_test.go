@@ -63,6 +63,13 @@ func TestRequirementRunUsesRegistryPromptAndSchema(t *testing.T) {
 		if body["instructions"] != "registry controlled instructions" {
 			t.Fatalf("provider received non-registry instructions: %v", body["instructions"])
 		}
+		if body["max_output_tokens"] != float64(4096) {
+			t.Fatalf("provider received wrong output budget: %v", body["max_output_tokens"])
+		}
+		reasoning := body["reasoning"].(map[string]any)
+		if reasoning["effort"] != "high" {
+			t.Fatalf("provider received wrong reasoning budget: %#v", reasoning)
+		}
 		format := body["text"].(map[string]any)["format"].(map[string]any)
 		schema := format["schema"].(map[string]any)
 		if schema["x-registry-version"] != "prompt-v7" {
@@ -73,8 +80,10 @@ func TestRequirementRunUsesRegistryPromptAndSchema(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
 	})
 	_, trace, err := client.ReviewRequirementWithPrompt(context.Background(), "run-7", "source", "", RuntimePrompt{
-		Instructions: "registry controlled instructions",
-		OutputSchema: json.RawMessage(`{"type":"object","x-registry-version":"prompt-v7"}`),
+		Instructions:    "registry controlled instructions",
+		OutputSchema:    json.RawMessage(`{"type":"object","x-registry-version":"prompt-v7"}`),
+		MaxOutputTokens: 4096,
+		ReasoningEffort: "high",
 	})
 	if err != nil {
 		t.Fatal(err)

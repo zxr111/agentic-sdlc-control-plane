@@ -54,8 +54,10 @@ type Trace struct {
 // SchemaName remains a code-owned protocol identifier while instructions and
 // JSON Schema are versioned governance data.
 type RuntimePrompt struct {
-	Instructions string
-	OutputSchema json.RawMessage
+	Instructions    string
+	OutputSchema    json.RawMessage
+	MaxOutputTokens int
+	ReasoningEffort string
 }
 
 func New(baseURL, apiKey, model string) *Client {
@@ -249,7 +251,8 @@ func (c *Client) ReviewRequirementWithPrompt(ctx context.Context, workflowID, so
 		input += "\n\nENGINEER FEEDBACK TO ADDRESS:\n" + feedback
 	}
 	var result RequirementReview
-	trace, err := c.generate(ctx, workflowID, "requirement_review_v1", instructions, input, schema, &result)
+	trace, err := c.generateWithPolicy(ctx, workflowID, "requirement_review_v1", instructions, input, schema,
+		generationPolicy{MaxOutputTokens: prompt.MaxOutputTokens, ReasoningEffort: prompt.ReasoningEffort}, "", "", &result)
 	return result, trace, err
 }
 
@@ -264,7 +267,8 @@ func (c *Client) GeneratePRDWithPrompt(ctx context.Context, workflowID, source, 
 		input += "\n\nENGINEER FEEDBACK TO ADDRESS:\n" + feedback
 	}
 	var result PRD
-	trace, err := c.generate(ctx, workflowID, "prd_v1", instructions, input, schema, &result)
+	trace, err := c.generateWithPolicy(ctx, workflowID, "prd_v1", instructions, input, schema,
+		generationPolicy{MaxOutputTokens: prompt.MaxOutputTokens, ReasoningEffort: prompt.ReasoningEffort}, "", "", &result)
 	return result, trace, err
 }
 
@@ -279,7 +283,8 @@ func (c *Client) GenerateTestPlanWithPrompt(ctx context.Context, workflowID, sou
 		input += "\n\nENGINEER FEEDBACK TO ADDRESS:\n" + feedback
 	}
 	var result TestPlan
-	trace, err := c.generate(ctx, workflowID, "test_plan_v1", instructions, input, schema, &result)
+	trace, err := c.generateWithPolicy(ctx, workflowID, "test_plan_v1", instructions, input, schema,
+		generationPolicy{MaxOutputTokens: prompt.MaxOutputTokens, ReasoningEffort: prompt.ReasoningEffort}, "", "", &result)
 	return result, trace, err
 }
 
@@ -295,7 +300,8 @@ func (c *Client) GenerateArchitectureWithPrompt(ctx context.Context, workflowID,
 		input += "\n\nENGINEER FEEDBACK TO ADDRESS:\n" + feedback
 	}
 	var result Architecture
-	trace, err := c.generate(ctx, workflowID, "architecture_v2", instructions, input, schema, &result)
+	trace, err := c.generateWithPolicy(ctx, workflowID, "architecture_v2", instructions, input, schema,
+		generationPolicy{MaxOutputTokens: prompt.MaxOutputTokens, ReasoningEffort: prompt.ReasoningEffort}, "", "", &result)
 	return result, trace, err
 }
 
@@ -307,11 +313,21 @@ func runtimePrompt(prompt RuntimePrompt, fallbackInstructions string, fallbackSc
 }
 
 func (c *Client) generate(ctx context.Context, workflowID, schemaName, instructions, input string, schema json.RawMessage, result any) (Trace, error) {
-	return c.generateWithModel(ctx, workflowID, schemaName, instructions, input, schema, "", "", result)
+	return c.generateWithPolicy(ctx, workflowID, schemaName, instructions, input, schema, generationPolicy{}, "", "", result)
 }
 
 func (c *Client) generateWithModel(ctx context.Context, workflowID, schemaName, instructions, input string,
 	schema json.RawMessage, forcedModelID, forcedModelKey string, result any) (Trace, error) {
+	return c.generateWithPolicy(ctx, workflowID, schemaName, instructions, input, schema, generationPolicy{}, forcedModelID, forcedModelKey, result)
+}
+
+type generationPolicy struct {
+	MaxOutputTokens int
+	ReasoningEffort string
+}
+
+func (c *Client) generateWithPolicy(ctx context.Context, workflowID, schemaName, instructions, input string,
+	schema json.RawMessage, policy generationPolicy, forcedModelID, forcedModelKey string, result any) (Trace, error) {
 	startedAt := time.Now()
 	trace := Trace{}
 	modelKey := c.model
@@ -344,14 +360,22 @@ func (c *Client) generateWithModel(ctx context.Context, workflowID, schemaName, 
 		trace.RouteReason = "V3 model router disabled"
 	}
 	safety := sha256.Sum256([]byte("ai-sdlc-factory:" + workflowID))
+	maxOutputTokens := policy.MaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 12000
+	}
+	reasoningEffort := policy.ReasoningEffort
+	if reasoningEffort == "" {
+		reasoningEffort = "medium"
+	}
 	requestBody := map[string]any{
 		"model":             modelKey,
 		"instructions":      instructions,
 		"input":             input,
 		"store":             false,
-		"max_output_tokens": 12000,
+		"max_output_tokens": maxOutputTokens,
 		"safety_identifier": hex.EncodeToString(safety[:16]),
-		"reasoning":         map[string]any{"effort": "medium"},
+		"reasoning":         map[string]any{"effort": reasoningEffort},
 		"text": map[string]any{
 			"verbosity": "medium",
 			"format": map[string]any{

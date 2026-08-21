@@ -479,6 +479,10 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	baselineRuntime, err := repository.PromptRuntime(ctx, baseline.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	candidateContent := "review more safely " + uuid.NewString()
 	candidate, err := repository.CreatePromptVersion(ctx, "requirement-review", candidateContent,
 		json.RawMessage(`{"type":"object"}`), "integration-test")
@@ -622,6 +626,14 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", manifestID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	runPrompt, err := repository.AgentRunPromptRuntime(ctx, runID)
+	if err != nil || runPrompt.ID != baseline.ID || runPrompt.Content != baselineRuntime.Content {
+		t.Fatalf("run did not bind the promoted prompt: prompt=%#v err=%v", runPrompt, err)
+	}
+	generationPolicy, err := repository.AgentRunGenerationPolicy(ctx, runID)
+	if err != nil || generationPolicy.MaxOutputTokens != 12000 || generationPolicy.ReasoningEffort != "medium" {
+		t.Fatalf("run generation policy=%#v err=%v", generationPolicy, err)
 	}
 	trace := AgentRunTrace{ProviderResponseID: "resp_test", InputTokens: 120, CachedTokens: 20,
 		OutputTokens: 40, ReasoningTokens: 15, EstimatedCost: 99, LatencyMS: 321, FinishReason: "completed",
