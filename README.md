@@ -89,6 +89,14 @@ docker compose ps
 curl -i http://127.0.0.1:8080/readyz
 ```
 
+The first local example requirement is available without external credentials:
+
+```bash
+curl http://127.0.0.1:8080/hello
+```
+
+It returns `{"message":"Hello, World!","service":"ai-sdlc-factory"}`.
+
 API 健康后，打开 `http://127.0.0.1:8080/dashboard/`。使用 `docker compose logs -f api worker` 查看运行日志。项目配置以只读方式挂载到 `/etc/factory/projects.json`；使用 Compose 时不需要设置 `FACTORY_PROJECTS_FILE`。
 
 ## 配置说明

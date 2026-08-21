@@ -12,6 +12,7 @@ import (
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/config"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/dashboard"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/hello"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/webhook"
 )
@@ -35,6 +36,7 @@ func main() {
 		cfg.GitLabWebhookSecret, cfg.CallbackSharedSecret, cfg.Projects, repository, logger,
 	).Routes())
 	dashboard.New(repository, cfg.Projects, cfg.GitLabAPIURL, logger).Register(mux)
+	hello.Register(mux)
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           mux,
