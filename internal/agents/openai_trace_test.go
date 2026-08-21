@@ -53,6 +53,37 @@ func TestGenerateReturnsProviderTrace(t *testing.T) {
 	}
 }
 
+func TestRequirementRunUsesRegistryPromptAndSchema(t *testing.T) {
+	client := New("https://api.example.test", "test-key", "test-model")
+	client.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		if body["instructions"] != "registry controlled instructions" {
+			t.Fatalf("provider received non-registry instructions: %v", body["instructions"])
+		}
+		format := body["text"].(map[string]any)["format"].(map[string]any)
+		schema := format["schema"].(map[string]any)
+		if schema["x-registry-version"] != "prompt-v7" {
+			t.Fatalf("provider received non-registry schema: %#v", schema)
+		}
+		response := `{"id":"resp_registry","status":"completed","usage":{"input_tokens":10,"output_tokens":5},
+			"output":[{"type":"message","content":[{"type":"output_text","text":"{}"}]}]}`
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
+	})
+	_, trace, err := client.ReviewRequirementWithPrompt(context.Background(), "run-7", "source", "", RuntimePrompt{
+		Instructions: "registry controlled instructions",
+		OutputSchema: json.RawMessage(`{"type":"object","x-registry-version":"prompt-v7"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trace.ProviderResponseID != "resp_registry" {
+		t.Fatalf("unexpected trace %#v", trace)
+	}
+}
+
 func TestGenerateUsesControlledModelRoute(t *testing.T) {
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body map[string]any

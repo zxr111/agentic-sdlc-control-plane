@@ -535,9 +535,23 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	if err != nil || active.ID != candidate.ID {
 		t.Fatalf("candidate was not activated active=%#v err=%v", active, err)
 	}
+	assertActiveProfilePrompt := func(want string) {
+		t.Helper()
+		var got string
+		if err := repository.db.QueryRowContext(ctx, `SELECT apv.prompt_version_id::text FROM agent_profile_versions apv
+			JOIN agent_profiles ap ON ap.id=apv.agent_profile_id
+			WHERE ap.profile_key='requirement' AND apv.status='ACTIVE'`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("active profile prompt=%s want=%s", got, want)
+		}
+	}
+	assertActiveProfilePrompt(candidate.ID)
 	if err := repository.ActivatePromptVersion(ctx, "requirement-review", baseline.ID, "integration-reviewer"); err != nil {
 		t.Fatal(err)
 	}
+	assertActiveProfilePrompt(baseline.ID)
 	modelCandidateKey := "test-model-candidate-" + uuid.NewString()
 	modelCandidateID, err := repository.RegisterModelCandidate(ctx, "openai", modelCandidateKey, map[string]bool{"structured_output": true}, 10, 20)
 	if err != nil {

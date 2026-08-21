@@ -145,6 +145,26 @@ type PromptRuntime struct {
 	OutputSchema json.RawMessage
 }
 
+// AgentRunPromptRuntime resolves the immutable prompt and output schema bound
+// to a specific run. Callers must use this record for the provider request so
+// registry traceability describes actual execution rather than metadata only.
+func (s *Store) AgentRunPromptRuntime(ctx context.Context, agentRunID string) (PromptRuntime, error) {
+	var result PromptRuntime
+	var schema []byte
+	err := s.db.QueryRowContext(ctx, `SELECT pv.id,pd.prompt_key,pv.version,pv.status,pv.content_hash,pv.content,pv.output_schema
+		FROM agent_runs ar JOIN prompt_versions pv ON pv.id=ar.prompt_version_id
+		JOIN prompt_definitions pd ON pd.id=pv.prompt_definition_id WHERE ar.id=$1`, agentRunID).
+		Scan(&result.ID, &result.PromptKey, &result.Version, &result.Status, &result.ContentHash, &result.Content, &schema)
+	if err == sql.ErrNoRows {
+		return PromptRuntime{}, ErrNotFound
+	}
+	if err != nil {
+		return PromptRuntime{}, err
+	}
+	result.OutputSchema = json.RawMessage(schema)
+	return result, nil
+}
+
 func (s *Store) PromptRuntime(ctx context.Context, versionID string) (PromptRuntime, error) {
 	var result PromptRuntime
 	var schema []byte
@@ -245,6 +265,9 @@ func (s *Store) ActivatePromptVersion(ctx context.Context, promptKey, versionID,
 	if rows != 1 {
 		return ErrNotFound
 	}
+	if err := rollActiveProfilesToPrompt(ctx, tx, definitionID, versionID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO registry_activation_audits
 		(id,registry_type,definition_key,previous_version_id,activated_version_id,action,actor)
 		VALUES($1,'PROMPT',$2,$3,$4,'ROLLBACK',$5)`, uuid.NewString(), promptKey, previous, versionID, actor); err != nil {
@@ -294,6 +317,9 @@ func (s *Store) PromotePromptVersion(ctx context.Context, promptKey, versionID, 
 	if count != 1 {
 		return ErrNotFound
 	}
+	if err := rollActiveProfilesToPrompt(ctx, tx, definitionID, versionID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO registry_activation_audits
 		(id,registry_type,definition_key,previous_version_id,activated_version_id,evaluation_run_id,blind_review_id,canary_release_id,action,actor)
 		VALUES($1,'PROMPT',$2,$3,$4,$5,$6,$7,'PROMOTE',$8)`, uuid.NewString(), promptKey, previous, versionID,
@@ -301,6 +327,68 @@ func (s *Store) PromotePromptVersion(ctx context.Context, promptKey, versionID, 
 		return err
 	}
 	return tx.Commit()
+}
+
+type activeProfileBinding struct {
+	profileID       string
+	version         int
+	modelPolicyID   sql.NullString
+	contextPolicy   []byte
+	toolPolicy      []byte
+	skillVersionIDs []byte
+	budget          []byte
+}
+
+// rollActiveProfilesToPrompt preserves immutable profile versions while making
+// a governed prompt promotion effective for subsequent runs.
+func rollActiveProfilesToPrompt(ctx context.Context, tx *sql.Tx, definitionID, promptVersionID string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT apv.agent_profile_id::text,apv.version,apv.model_policy_id::text,
+		apv.context_policy,apv.tool_policy,apv.skill_version_ids,apv.budget_json
+		FROM agent_profile_versions apv JOIN prompt_versions pv ON pv.id=apv.prompt_version_id
+		WHERE pv.prompt_definition_id=$1 AND apv.status='ACTIVE' ORDER BY apv.agent_profile_id`, definitionID)
+	if err != nil {
+		return err
+	}
+	var bindings []activeProfileBinding
+	for rows.Next() {
+		var binding activeProfileBinding
+		if err := rows.Scan(&binding.profileID, &binding.version, &binding.modelPolicyID, &binding.contextPolicy,
+			&binding.toolPolicy, &binding.skillVersionIDs, &binding.budget); err != nil {
+			rows.Close()
+			return err
+		}
+		bindings = append(bindings, binding)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		var lockedProfile string
+		if err := tx.QueryRowContext(ctx, `SELECT id::text FROM agent_profiles WHERE id=$1 FOR UPDATE`, binding.profileID).
+			Scan(&lockedProfile); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE agent_profile_versions SET status='RETIRED'
+			WHERE agent_profile_id=$1 AND status='ACTIVE'`, binding.profileID); err != nil {
+			return err
+		}
+		var modelPolicy any
+		if binding.modelPolicyID.Valid {
+			modelPolicy = binding.modelPolicyID.String
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_profile_versions
+			(id,agent_profile_id,version,status,prompt_version_id,model_policy_id,context_policy,tool_policy,skill_version_ids,budget_json)
+			VALUES($1,$2,$3,'ACTIVE',$4,$5,$6,$7,$8,$9)`, uuid.NewString(), binding.profileID,
+			binding.version+1, promptVersionID, modelPolicy, binding.contextPolicy, binding.toolPolicy,
+			binding.skillVersionIDs, binding.budget); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) ActivePromptVersion(ctx context.Context, promptKey string) (PromptVersionRecord, error) {

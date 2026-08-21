@@ -379,6 +379,18 @@ func storeTrace(trace agents.Trace) store.AgentRunTrace {
 	}
 }
 
+func (e *Engine) runtimePromptForRun(ctx context.Context, runID, fallbackLabel string) (agents.RuntimePrompt, string, error) {
+	if !e.v3.Registry {
+		return agents.RuntimePrompt{}, fallbackLabel, nil
+	}
+	prompt, err := e.store.AgentRunPromptRuntime(ctx, runID)
+	if err != nil {
+		return agents.RuntimePrompt{}, "", fmt.Errorf("resolve Agent Run prompt: %w", err)
+	}
+	return agents.RuntimePrompt{Instructions: prompt.Content, OutputSchema: prompt.OutputSchema},
+		fmt.Sprintf("%s-v%d", prompt.PromptKey, prompt.Version), nil
+}
+
 // cancellableAgentContext turns the durable cancellation flag into context
 // cancellation. Provider clients already honor context cancellation, so a
 // cancelled Run cannot continue an expensive model request in the background.

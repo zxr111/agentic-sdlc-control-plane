@@ -56,8 +56,13 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 	}
 	runCtx, cancelRun := e.cancellableAgentContext(ctx, runID)
 	defer cancelRun()
-	value, trace, err := e.agents.GenerateArchitecture(runCtx, runID, agentContext,
-		string(requirement.Content), string(prd.Content), string(testPlan.Content), event.Feedback)
+	runtimePrompt, promptLabel, err := e.runtimePromptForRun(ctx, runID, "architecture-v2")
+	if err != nil {
+		_ = e.store.FinishAgentRun(ctx, runID, "FAILED", "", err)
+		return err
+	}
+	value, trace, err := e.agents.GenerateArchitectureWithPrompt(runCtx, runID, agentContext,
+		string(requirement.Content), string(prd.Content), string(testPlan.Content), event.Feedback, runtimePrompt)
 	if err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
@@ -83,7 +88,7 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 		ID: uuid.NewString(), WorkflowID: workflow.ID, Type: domain.ArtifactArchitecture,
 		Version: version, SourceHash: workflow.SourceHash, Content: raw,
 		Markdown: agents.RenderArchitecture(value) + multiAgentMarkdown, Model: e.agents.Model(),
-		Prompt: "architecture-v2", GeneratedAt: time.Now().UTC(),
+		Prompt: promptLabel, GeneratedAt: time.Now().UTC(),
 	}
 	project := e.projects[workflow.GitLabProjectID]
 	gate := domain.NewGate(workflow.ID, domain.GateArchitecture, artifact.ID, version,

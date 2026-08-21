@@ -33,7 +33,12 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 	}
 	runCtx, cancelRun := e.cancellableAgentContext(ctx, runID)
 	defer cancelRun()
-	review, trace, err := e.agents.ReviewRequirement(runCtx, runID, agentContext, feedback)
+	runtimePrompt, promptLabel, err := e.runtimePromptForRun(ctx, runID, "requirement-review-v1")
+	if err != nil {
+		_ = e.store.FinishAgentRun(ctx, runID, "FAILED", "", err)
+		return err
+	}
+	review, trace, err := e.agents.ReviewRequirementWithPrompt(runCtx, runID, agentContext, feedback, runtimePrompt)
 	if err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
@@ -59,7 +64,7 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 		ID: uuid.NewString(), WorkflowID: workflow.ID, Type: domain.ArtifactRequirement,
 		Version: version, SourceHash: combinedHash(snapshots), Content: raw,
 		Markdown: agents.RenderRequirement(review, snapshots) + multiAgentMarkdown, Model: e.agents.Model(),
-		Prompt: "requirement-review-v1", GeneratedAt: time.Now().UTC(),
+		Prompt: promptLabel, GeneratedAt: time.Now().UTC(),
 	}
 	gate := domain.NewGate(workflow.ID, domain.GateRequirement, artifact.ID, version, project.ReviewerIDs[domain.GateRequirement])
 	body := artifactHeader(workflow, snapshots, artifact) + artifact.Markdown +
@@ -136,6 +141,18 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 		_ = e.store.FinishAgentRun(ctx, prdRunID, "FAILED", "", err)
 		return err
 	}
+	prdPrompt, prdPromptLabel, err := e.runtimePromptForRun(ctx, prdRunID, "prd-v1")
+	if err != nil {
+		_ = e.store.FinishAgentRun(ctx, prdRunID, "FAILED", "", err)
+		_ = e.store.FinishAgentRun(ctx, testRunID, "FAILED", "", err)
+		return err
+	}
+	testPrompt, testPromptLabel, err := e.runtimePromptForRun(ctx, testRunID, "test-plan-v1")
+	if err != nil {
+		_ = e.store.FinishAgentRun(ctx, prdRunID, "FAILED", "", err)
+		_ = e.store.FinishAgentRun(ctx, testRunID, "FAILED", "", err)
+		return err
+	}
 	var prd agents.PRD
 	var tests agents.TestPlan
 	var prdTrace, testTrace agents.Trace
@@ -148,11 +165,11 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 	wait.Add(2)
 	go func() {
 		defer wait.Done()
-		prd, prdTrace, prdErr = e.agents.GeneratePRD(prdCtx, prdRunID, source, string(reviewJSON), prdFeedback)
+		prd, prdTrace, prdErr = e.agents.GeneratePRDWithPrompt(prdCtx, prdRunID, source, string(reviewJSON), prdFeedback, prdPrompt)
 	}()
 	go func() {
 		defer wait.Done()
-		tests, testTrace, testErr = e.agents.GenerateTestPlan(testCtx, testRunID, testSource, string(reviewJSON), testFeedback)
+		tests, testTrace, testErr = e.agents.GenerateTestPlanWithPrompt(testCtx, testRunID, testSource, string(reviewJSON), testFeedback, testPrompt)
 	}()
 	wait.Wait()
 	if prdErr != nil {
@@ -179,12 +196,12 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 	prdArtifact := domain.Artifact{
 		ID: uuid.NewString(), WorkflowID: workflow.ID, Type: domain.ArtifactPRD,
 		Version: prdVersion, SourceHash: workflow.SourceHash, Content: prdRaw,
-		Markdown: agents.RenderPRD(prd), Model: e.agents.Model(), Prompt: "prd-v1", GeneratedAt: now,
+		Markdown: agents.RenderPRD(prd), Model: e.agents.Model(), Prompt: prdPromptLabel, GeneratedAt: now,
 	}
 	testArtifact := domain.Artifact{
 		ID: uuid.NewString(), WorkflowID: workflow.ID, Type: domain.ArtifactTestPlan,
 		Version: testVersion, SourceHash: workflow.SourceHash, Content: testRaw,
-		Markdown: agents.RenderTestPlan(tests), Model: e.agents.Model(), Prompt: "test-plan-v1", GeneratedAt: now,
+		Markdown: agents.RenderTestPlan(tests), Model: e.agents.Model(), Prompt: testPromptLabel, GeneratedAt: now,
 	}
 	prdGate := domain.NewGate(workflow.ID, domain.GatePRD, prdArtifact.ID, prdVersion, project.ReviewerIDs[domain.GatePRD])
 	testGate := domain.NewGate(workflow.ID, domain.GateTest, testArtifact.ID, testVersion, project.ReviewerIDs[domain.GateTest])
