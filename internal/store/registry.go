@@ -61,15 +61,40 @@ func (s *Store) BootstrapRegistry(ctx context.Context, model string, definitions
 			definition.DisplayName, "Factory 内置 Prompt"); err != nil {
 			return err
 		}
+		var lockedDefinitionID string
+		if err := tx.QueryRowContext(ctx, `SELECT id::text FROM prompt_definitions WHERE id=$1 FOR UPDATE`, promptDefinitionID).
+			Scan(&lockedDefinitionID); err != nil {
+			return err
+		}
 		schema := []byte(definition.OutputSchema)
 		digest := sha256.Sum256(append(append([]byte(definition.Instructions), 0), schema...))
 		contentHash := hex.EncodeToString(digest[:])
 		promptVersionID := registryID("prompt-version", definition.PromptKey+":"+contentHash)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO prompt_versions
-			(id,prompt_definition_id,version,status,content,output_schema,content_hash,created_by,approved_by,approved_at)
-			VALUES ($1,$2,1,'ACTIVE',$3,$4,$5,'factory-bootstrap','factory-bootstrap',CURRENT_TIMESTAMP)
-			ON CONFLICT (prompt_definition_id,content_hash) DO NOTHING`, promptVersionID, promptDefinitionID,
-			definition.Instructions, string(schema), contentHash); err != nil {
+		var promptStatus string
+		err := tx.QueryRowContext(ctx, `SELECT id::text,status FROM prompt_versions
+			WHERE prompt_definition_id=$1 AND content_hash=$2`, promptDefinitionID, contentHash).
+			Scan(&promptVersionID, &promptStatus)
+		if err == sql.ErrNoRows {
+			var version int
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0)+1 FROM prompt_versions
+				WHERE prompt_definition_id=$1`, promptDefinitionID).Scan(&version); err != nil {
+				return err
+			}
+			promptStatus = "DRAFT"
+			approvedBy := ""
+			var approvedAt any
+			if version == 1 {
+				promptStatus = "ACTIVE"
+				approvedBy = "factory-bootstrap"
+				approvedAt = time.Now().UTC()
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO prompt_versions
+				(id,prompt_definition_id,version,status,content,output_schema,content_hash,created_by,approved_by,approved_at)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,'factory-bootstrap',$8,$9)`, promptVersionID, promptDefinitionID,
+				version, promptStatus, definition.Instructions, string(schema), contentHash, approvedBy, approvedAt); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 		profileKey := strings.ToLower(definition.AgentType)
@@ -79,6 +104,12 @@ func (s *Store) BootstrapRegistry(ctx context.Context, model string, definitions
 			ON CONFLICT (profile_key) DO NOTHING`, profileID, profileKey, definition.DisplayName,
 			"Factory 内置 Agent Profile"); err != nil {
 			return err
+		}
+		// A changed built-in prompt is deliberately left as a DRAFT. The active
+		// profile must continue to reference the previously approved prompt until
+		// the candidate completes evaluation and independent approval.
+		if promptStatus != "ACTIVE" {
+			continue
 		}
 		profileVersionID := registryID("agent-profile-version", profileKey+":"+contentHash+":"+model)
 		allowedTools := []string{"knowledge.search", "memory.propose", "gitlab.comment"}

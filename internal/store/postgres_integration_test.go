@@ -844,6 +844,53 @@ func TestV3ContextManifestAndAgentTraceRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRegistryBootstrapCreatesDraftForChangedBuiltinPrompt(t *testing.T) {
+	repository := integrationStore(t)
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	promptKey := "bootstrap-prompt-" + suffix
+	agentType := "BOOTSTRAP_" + strings.ToUpper(strings.ReplaceAll(suffix, "-", ""))
+	initial := RegistryDefinition{AgentType: agentType, PromptKey: promptKey, DisplayName: "Bootstrap test",
+		Instructions: "initial governed prompt", OutputSchema: json.RawMessage(`{"type":"object"}`)}
+	if err := repository.BootstrapRegistry(ctx, "test-model", []RegistryDefinition{initial}); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := repository.ActivePromptVersion(ctx, promptKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := initial
+	changed.Instructions = "changed governed prompt"
+	if err := repository.BootstrapRegistry(ctx, "test-model", []RegistryDefinition{changed}); err != nil {
+		t.Fatalf("changed bootstrap must not collide with version one: %v", err)
+	}
+	if err := repository.BootstrapRegistry(ctx, "test-model", []RegistryDefinition{changed}); err != nil {
+		t.Fatalf("changed bootstrap must remain idempotent: %v", err)
+	}
+	active, err := repository.ActivePromptVersion(ctx, promptKey)
+	if err != nil || active.ID != baseline.ID || active.Version != 1 {
+		t.Fatalf("bootstrap replaced the active version: active=%#v baseline=%#v err=%v", active, baseline, err)
+	}
+	var draftCount int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM prompt_versions pv
+		JOIN prompt_definitions pd ON pd.id=pv.prompt_definition_id
+		WHERE pd.prompt_key=$1 AND pv.version=2 AND pv.status='DRAFT'`, promptKey).Scan(&draftCount); err != nil {
+		t.Fatal(err)
+	}
+	if draftCount != 1 {
+		t.Fatalf("expected one immutable version-two draft, got %d", draftCount)
+	}
+	var boundPromptID string
+	if err := repository.db.QueryRowContext(ctx, `SELECT apv.prompt_version_id::text FROM agent_profile_versions apv
+		JOIN agent_profiles ap ON ap.id=apv.agent_profile_id WHERE ap.profile_key=$1 AND apv.status='ACTIVE'`,
+		strings.ToLower(agentType)).Scan(&boundPromptID); err != nil {
+		t.Fatal(err)
+	}
+	if boundPromptID != baseline.ID {
+		t.Fatalf("active profile moved to unapproved draft: got %s want %s", boundPromptID, baseline.ID)
+	}
+}
+
 func TestV3KnowledgeAndProjectMemoryLifecycle(t *testing.T) {
 	repository := integrationStore(t)
 	ctx := context.Background()
