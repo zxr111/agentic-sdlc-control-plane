@@ -2,7 +2,6 @@
 
 ## Documentation and user-facing content
 
-- Write repository documentation and operational messages in English.
 - Generated GitLab requirement artifacts may use the source requirement language.
 - Never log, commit, copy into an Issue, or return credentials.
 

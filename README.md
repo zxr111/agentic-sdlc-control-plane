@@ -1,5 +1,7 @@
 # Agentic SDLC Control Plane
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 An auditable, engineer-governed software delivery control plane that turns an authoritative requirement into reviewed artifacts, visible coding work, exact-commit quality evidence, and a test-environment release.
 
 The project combines two complementary systems:
