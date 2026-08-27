@@ -333,6 +333,9 @@ type EvaluationOutputTrace struct {
 
 func (s *Store) RecordEvaluationOutputTrace(ctx context.Context, runID, caseID string, output json.RawMessage,
 	artifactID string, latency time.Duration, runError error, scores []evaluation.Score, trace EvaluationOutputTrace) error {
+	if len(output) == 0 {
+		output = json.RawMessage(`null`)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

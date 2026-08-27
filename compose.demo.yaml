@@ -1,0 +1,22 @@
+# Local-only overlay. Generated model output is synthetic and is never valid
+# evidence for release or production decisions.
+services:
+  model-mock:
+    image: ai-sdlc-factory:local
+    build:
+      context: .
+    command: ["/usr/local/bin/factory-model-mock"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8091/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  agent-runtime:
+    environment:
+      OPENAI_API_URL: http://model-mock:8091
+      OPENAI_API_KEY: local-demo-not-a-credential
+    depends_on:
+      model-mock:
+        condition: service_healthy

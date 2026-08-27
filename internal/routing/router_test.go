@@ -22,3 +22,11 @@ func TestLowRiskRouterHonorsBudgetAndCost(t *testing.T) {
 		t.Fatalf("budget route failed %#v err=%v", decision, err)
 	}
 }
+
+func TestPreferredGovernedModelAcceptsRegistryKey(t *testing.T) {
+	models := []Model{{ID: "version-uuid", Key: "gpt-test", Active: true, Healthy: true, Capabilities: map[string]bool{"structured_output": true}}}
+	decision, err := Route(models, Request{PreferredModelID: "gpt-test", RequiredCapabilities: []string{"structured_output"}})
+	if err != nil || decision.Model.ID != "version-uuid" || decision.Fallback {
+		t.Fatalf("registry key did not select preferred governed model: %#v err=%v", decision, err)
+	}
+}

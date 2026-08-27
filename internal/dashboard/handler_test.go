@@ -34,7 +34,7 @@ func dashboardMux(reader Reader) *http.ServeMux {
 
 func TestIndexAndAssetsAreEmbedded(t *testing.T) {
 	mux := dashboardMux(fakeReader{})
-	for _, path := range []string{"/dashboard/", "/dashboard/assets/app.css", "/dashboard/assets/app.js"} {
+	for _, path := range []string{"/dashboard/", "/dashboard/v3/", "/dashboard/assets/app.css", "/dashboard/assets/app.js", "/dashboard/assets/v3.js"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		mux.ServeHTTP(response, request)

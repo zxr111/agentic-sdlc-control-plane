@@ -49,7 +49,7 @@ func Route(models []Model, request Request) (Decision, error) {
 		return Decision{}, errors.New("no healthy model satisfies capability and budget policy")
 	}
 	for _, model := range eligible {
-		if model.ID == request.PreferredModelID {
+		if model.ID == request.PreferredModelID || model.Key == request.PreferredModelID {
 			return Decision{Model: model, EstimatedCost: estimate(model, request), Reason: "preferred model is healthy and policy-compliant"}, nil
 		}
 	}

@@ -46,8 +46,17 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		http.Redirect(writer, request, "/dashboard/", http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("GET /dashboard/", h.index)
+	mux.HandleFunc("GET /dashboard/v3/", h.v3Index)
 	mux.Handle("GET /dashboard/assets/", http.StripPrefix("/dashboard/assets/", h.assets))
 	mux.HandleFunc("GET /api/dashboard", h.data)
+}
+
+func (h *Handler) v3Index(writer http.ResponseWriter, request *http.Request) {
+	if request.URL.Path != "/dashboard/v3/" {
+		http.NotFound(writer, request)
+		return
+	}
+	h.servePage(writer, "assets/v3.html")
 }
 
 func (h *Handler) index(writer http.ResponseWriter, request *http.Request) {
@@ -55,7 +64,11 @@ func (h *Handler) index(writer http.ResponseWriter, request *http.Request) {
 		http.NotFound(writer, request)
 		return
 	}
-	content, err := assetFiles.ReadFile("assets/index.html")
+	h.servePage(writer, "assets/index.html")
+}
+
+func (h *Handler) servePage(writer http.ResponseWriter, name string) {
+	content, err := assetFiles.ReadFile(name)
 	if err != nil {
 		h.logger.Error("dashboard asset unavailable", "error", err)
 		http.Error(writer, "dashboard unavailable", http.StatusInternalServerError)

@@ -111,7 +111,7 @@ func main() {
 			logger.Error("V3 model health load failed", "error", err)
 			os.Exit(1)
 		}
-		models := governedModels
+		models := applyModelHealth(governedModels, health)
 		if len(models) == 0 {
 			models = make([]routing.Model, 0, len(cfg.ModelCatalog))
 			for _, model := range cfg.ModelCatalog {
@@ -140,6 +140,16 @@ func main() {
 	defer cancel()
 	logger.Info("factory worker started", "worker_id", cfg.WorkerID)
 	run(ctx, cfg, repository, runner, logger)
+}
+
+func applyModelHealth(models []routing.Model, health map[string]store.ModelHealthSnapshot) []routing.Model {
+	result := append([]routing.Model(nil), models...)
+	for index := range result {
+		if snapshot, ok := health[result[index].Key]; ok {
+			result[index].Healthy = snapshot.Healthy
+		}
+	}
+	return result
 }
 
 func run(ctx context.Context, cfg config.Config, repository *store.Store, runner *engine.Engine, logger *slog.Logger) {

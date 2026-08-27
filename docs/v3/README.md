@@ -83,6 +83,7 @@ flowchart TB
 - [安全设计](security.md)：权限边界、Prompt Injection、工具风险和生产锁定。
 - [实施计划](implementation-plan.md)：阶段、验收标准、兼容策略和交付顺序。
 - [测试环境部署与验收手册](test-environment-runbook.md)：开关顺序、部署、端到端验收和回滚。
+- [本地无 Token 演示](local-demo.md)：使用确定性 Mock 模型运行本地 V3 集成演示。
 
 ## 不在 V3 范围内
 

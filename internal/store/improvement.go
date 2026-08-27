@@ -164,6 +164,14 @@ func (s *Store) ProposeOperationalImprovements(ctx context.Context, projectID in
 		"evaluation cases must be sanitized and split without contaminating Holdout data"); err != nil {
 		return nil, err
 	}
+	if err := appendClusters(`SELECT lower(ar.agent_type),json_agg(ar.id::text ORDER BY ar.id)
+		FROM agent_runs ar JOIN workflows w ON w.id=ar.workflow_id WHERE w.gitlab_project_id=$1
+		AND ar.status='FAILED' AND ar.started_at>=CURRENT_TIMESTAMP-INTERVAL '90 days'
+		GROUP BY lower(ar.agent_type) HAVING count(*)>=2`,
+		"PROMPT_CHANGE", "AGENT_RUN_FAILURE", "reduce recurring governed Agent failures while preserving output and safety contracts",
+		"prompt changes may overfit local provider failures and require independent evaluation before activation"); err != nil {
+		return nil, err
+	}
 	incidentQuery := `SELECT lower(i.severity),json_agg(i.id::text ORDER BY i.id)
 		FROM incidents i JOIN workflows w ON w.id=i.workflow_id WHERE w.gitlab_project_id=$1
 		AND i.created_at>=CURRENT_TIMESTAMP-INTERVAL '90 days' GROUP BY lower(i.severity)`
