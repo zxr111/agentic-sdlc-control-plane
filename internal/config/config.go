@@ -165,10 +165,10 @@ func (c Config) Validate() error {
 		preferred := false
 		for _, model := range c.ModelCatalog {
 			if strings.TrimSpace(model.Key) == "" {
-				return errors.New("V3 model catalog contains an empty key")
+				return errors.New("Agent Platform model catalog contains an empty key")
 			}
 			if seen[model.Key] {
-				return fmt.Errorf("duplicate V3 model key %s", model.Key)
+				return fmt.Errorf("duplicate Agent Platform model key %s", model.Key)
 			}
 			seen[model.Key] = true
 			if model.Key == c.OpenAIModel {
@@ -176,7 +176,7 @@ func (c Config) Validate() error {
 			}
 		}
 		if !preferred {
-			return fmt.Errorf("OPENAI_MODEL %s is missing from V3 model catalog", c.OpenAIModel)
+			return fmt.Errorf("OPENAI_MODEL %s is missing from Agent Platform model catalog", c.OpenAIModel)
 		}
 	}
 	return nil

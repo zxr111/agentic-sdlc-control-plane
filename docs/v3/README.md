@@ -1,6 +1,6 @@
-# AI SDLC Factory V3 设计总览
+# AI SDLC Factory Agent 平台设计总览
 
-V3 将当前由确定性状态机编排的阶段型 Agent，扩展为一个可版本化、可检索、可评测、可治理的 Agent SDLC 平台。V3 不改变现有的核心安全边界：工作流状态、Engineer Gate、权限判断、外部写操作和发布授权仍由 Go Factory 控制；Agent 只能生成结构化候选结果，不能自行批准 Gate、提升权限或执行生产操作。
+Agent 平台将当前由确定性状态机编排的阶段型 Agent，扩展为一个可版本化、可检索、可评测、可治理的 Agent SDLC 平台。它不改变现有的核心安全边界：工作流状态、Engineer Gate、权限判断、外部写操作和发布授权仍由 Go Factory 控制；Agent 只能生成结构化候选结果，不能自行批准 Gate、提升权限或执行生产操作。
 
 ## 设计目标
 
@@ -83,9 +83,9 @@ flowchart TB
 - [安全设计](security.md)：权限边界、Prompt Injection、工具风险和生产锁定。
 - [实施计划](implementation-plan.md)：阶段、验收标准、兼容策略和交付顺序。
 - [测试环境部署与验收手册](test-environment-runbook.md)：开关顺序、部署、端到端验收和回滚。
-- [本地无 Token 演示](local-demo.md)：使用确定性 Mock 模型运行本地 V3 集成演示。
+- [本地无 Token 演示](local-demo.md)：使用确定性 Mock 模型运行本地 Agent 平台集成演示。
 
-## 不在 V3 范围内
+## 不在 Agent 平台范围内
 
 - Factory Worker 无头运行 Codex 或其他 Coding Agent。
 - Agent 自动批准自己的产物或 Engineer Gate。
@@ -95,7 +95,7 @@ flowchart TB
 
 ## 完成定义
 
-V3 完成不等于“代码路径存在”，而是至少满足：
+Agent 平台完成不等于“代码路径存在”，而是至少满足：
 
 1. 所有数据库迁移可在空库和现有 V2 数据库上成功执行。
 2. 现有 V2 工作流语义保持兼容。

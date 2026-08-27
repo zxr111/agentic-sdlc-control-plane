@@ -1,8 +1,8 @@
-# V3 总体架构
+# Agent 平台总体架构
 
 ## 架构原则
 
-V3 采用“确定性控制平面 + 受限智能平面”的架构。
+Agent 平台采用“确定性控制平面 + 受限智能平面”的架构。
 
 - **控制平面**拥有工作流状态、授权、Gate、外部写操作和发布决定。
 - **智能平面**负责分析、检索、压缩、评审和生成候选产物。
@@ -14,7 +14,7 @@ V3 采用“确定性控制平面 + 受限智能平面”的架构。
 
 ### factory-api
 
-延续现有职责：验证 GitLab Webhook 与 Callback Secret，限制请求大小，标准化事件并持久化后返回。V3 新增只读查询接口，用于 Dashboard 查看 Prompt、模型、Context、检索、评测和多 Agent 轨迹。
+延续现有职责：验证 GitLab Webhook 与 Callback Secret，限制请求大小，标准化事件并持久化后返回。Agent 平台新增只读查询接口，用于 Dashboard 查看 Prompt、模型、Context、检索、评测和多 Agent 轨迹。
 
 ### factory-worker
 

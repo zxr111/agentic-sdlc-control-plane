@@ -544,7 +544,7 @@ func (e *Engine) reconcile(ctx context.Context) error {
 	if e.v3.Evaluation {
 		for projectID := range e.projects {
 			if _, err := e.store.ProposeOperationalImprovements(ctx, projectID, ""); err != nil {
-				return fmt.Errorf("cluster V3 operational improvements for project %d: %w", projectID, err)
+				return fmt.Errorf("cluster Agent Platform operational improvements for project %d: %w", projectID, err)
 			}
 		}
 	}

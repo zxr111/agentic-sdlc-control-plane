@@ -5,7 +5,7 @@ An auditable, engineer-governed software delivery control plane that turns an au
 The project combines two complementary systems:
 
 - **Delivery Workflow** controls what may happen next: state transitions, Engineer Gates, work items, merge requests, CI, deployment, observation, and audit evidence.
-- **V3 Agent Platform** controls how AI work is performed: versioned prompts and profiles, model routing, RAG, multi-agent review, tool policy, evaluation, canary governance, and continuous improvement.
+- **Agent Platform** controls how AI work is performed: versioned prompts and profiles, model routing, RAG, multi-agent review, tool policy, evaluation, canary governance, and continuous improvement.
 
 AI generates structured candidates. Deterministic policy and authorized engineers retain delivery authority.
 
@@ -33,7 +33,7 @@ flowchart LR
     GL[GitLab Issue / MR / Pipeline] <--> WF
     CB[Quality and delivery callbacks] --> WF
 
-    WF --> AP[V3 Agent Platform]
+    WF --> AP[Agent Platform]
     AP --> REG[Prompt / Model / Profile Registry]
     AP --> RAG[Hybrid RAG and Project Memory]
     AP --> MA[Primary / Critic / Security / Judge]
@@ -77,7 +77,7 @@ GitLab Feature Issue
 
 The local demonstration has exercised this complete lifecycle with 19 persisted workflow revisions, six approved Engineer Gates, thirteen completed Agent Runs, one merged work item, test deployment evidence, and a completed observation window.
 
-## V3 Agent Platform
+## Agent Platform
 
 ### Immutable registry and runtime evidence
 
@@ -129,7 +129,7 @@ The API embeds two read-only dashboards that refresh every ten seconds:
 | View | Purpose | Local URL |
 |---|---|---|
 | Delivery Workflow | Workflow state, Gates, work items, artifacts, sources, queues, failures, and audit activity | `http://127.0.0.1:8080/dashboard/` |
-| V3 Agent Platform | Registry, runs, usage, routing, opinions, evaluation, knowledge, tools, governance, and improvement candidates | `http://127.0.0.1:8080/dashboard/v3/` |
+| Agent Platform | Registry, runs, usage, routing, opinions, evaluation, knowledge, tools, governance, and improvement candidates | `http://127.0.0.1:8080/dashboard/v3/` |
 
 The test-cluster Ingress exposes only the exact authenticated integration routes. It does not expose these dashboard paths publicly.
 
@@ -153,7 +153,7 @@ http://127.0.0.1:8080/dashboard/
 http://127.0.0.1:8080/dashboard/v3/
 ```
 
-The demo model requires no external token. A complete delivery run also needs test GitLab and Confluence endpoints; the repository includes local-only fixture commands used to exercise those integration boundaries. See [Local V3 demonstration](docs/v3/local-demo.md).
+The demo model requires no external token. A complete delivery run also needs test GitLab and Confluence endpoints; the repository includes local-only fixture commands used to exercise those integration boundaries. See [Local Agent Platform demonstration](docs/v3/local-demo.md).
 
 The standalone sample endpoint is available at:
 
@@ -253,10 +253,10 @@ internal/store/              PostgreSQL state, evidence, registry, and evaluatio
 internal/knowledge/          Retrieval and context policies
 internal/multiagent/         Independent role orchestration
 internal/toolgateway/        Tool authorization and MCP gateway
-internal/dashboard/          Embedded Delivery and V3 control rooms
+internal/dashboard/          Embedded Delivery and Agent Platform control rooms
 deploy/                      Kubernetes base and test overlay
 docs/                        Architecture, operations, security, and testing
-docs/v3/                     V3 Agent Platform design and runbooks
+docs/v3/                     Agent Platform design and runbooks
 ```
 
 ## Security properties
@@ -270,7 +270,7 @@ docs/v3/                     V3 Agent Platform design and runbooks
 - Prompt/model activation requires evaluation and governance evidence.
 - Production is disabled by default and production credentials are absent.
 
-See [Architecture](docs/architecture.md), [Security](docs/security.md), [Testing](docs/testing.md), [Operations](docs/operations.md), and the [V3 design index](docs/v3/README.md).
+See [Architecture](docs/architecture.md), [Security](docs/security.md), [Testing](docs/testing.md), [Operations](docs/operations.md), and the [Agent Platform design index](docs/v3/README.md).
 
 ## Current scope
 
@@ -280,7 +280,7 @@ Implemented and locally exercised:
 - immutable source and artifact traceability;
 - Engineer Gates and visible Codex dispatch;
 - exact-SHA MR quality evidence;
-- V3 registry, runtime evidence, RAG, memory, multi-agent review, tools, routing, evaluation, canary governance, and improvement candidates;
+- Agent Platform registry, runtime evidence, RAG, memory, multi-agent review, tools, routing, evaluation, canary governance, and improvement candidates;
 - Docker Compose and Kubernetes test deployment;
 - read-only Delivery and Agent Platform dashboards.
 

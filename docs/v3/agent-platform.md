@@ -1,8 +1,8 @@
-# V3 Agent 平台设计
+# Agent 平台设计
 
 ## Agent Profile
 
-V3 使用版本化 Agent Profile 替代散落在代码中的角色配置。一个 Profile 绑定：
+Agent 平台使用版本化 Agent Profile 替代散落在代码中的角色配置。一个 Profile 绑定：
 
 - Agent 类型与职责。
 - Prompt 版本。
@@ -63,7 +63,7 @@ Context Manifest 保存每个条目的来源、版本、Hash、可信等级、�
 
 ## 多 Agent 协作
 
-V3 默认使用“独立分析 + Judge”拓扑，不允许无界自由讨论。
+Agent 平台默认使用“独立分析 + Judge”拓扑，不允许无界自由讨论。
 
 ```mermaid
 flowchart LR

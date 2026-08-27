@@ -48,7 +48,7 @@ func main() {
 		}
 		for _, model := range cfg.ModelCatalog {
 			if err := repository.BootstrapRegistry(context.Background(), model.Key, seeds); err != nil {
-				logger.Error("V3 registry bootstrap failed", "model", model.Key, "error", err)
+				logger.Error("Agent Platform registry bootstrap failed", "model", model.Key, "error", err)
 				os.Exit(1)
 			}
 		}
@@ -66,12 +66,12 @@ func main() {
 				TriggerRules: map[string]any{"agent_types": skill.AgentTypes}, Scope: map[string]any{"project_allowlist_required": true}})
 		}
 		if err := repository.BootstrapGovernance(context.Background(), toolSeeds, skillSeeds); err != nil {
-			logger.Error("V3 tool and skill registry bootstrap failed", "error", err)
+			logger.Error("Agent Platform tool and skill registry bootstrap failed", "error", err)
 			os.Exit(1)
 		}
 		if cfg.V3.Evaluation {
 			if _, err := repository.BootstrapSecurityEvaluationSuite(context.Background()); err != nil {
-				logger.Error("V3 security evaluation bootstrap failed", "error", err)
+				logger.Error("Agent Platform security evaluation bootstrap failed", "error", err)
 				os.Exit(1)
 			}
 		}
@@ -81,7 +81,7 @@ func main() {
 		err := repository.WaitForRegistryRuntime(waitCtx, 2*time.Second)
 		cancelWait()
 		if err != nil {
-			logger.Error("V3 registry did not become ready", "error", err)
+			logger.Error("Agent Platform registry did not become ready", "error", err)
 			os.Exit(1)
 		}
 	}
@@ -95,7 +95,7 @@ func main() {
 	if cfg.V3.ModelRouter && cfg.V3.Registry {
 		models, preferred, allowFallback, err := repository.ActiveRoutingModels(context.Background())
 		if err != nil {
-			logger.Error("V3 governed model registry load failed", "error", err)
+			logger.Error("Agent Platform governed model registry load failed", "error", err)
 			os.Exit(1)
 		}
 		governedModels = models
@@ -108,7 +108,7 @@ func main() {
 	if cfg.V3.ModelRouter {
 		health, err := repository.LatestModelHealth(context.Background())
 		if err != nil {
-			logger.Error("V3 model health load failed", "error", err)
+			logger.Error("Agent Platform model health load failed", "error", err)
 			os.Exit(1)
 		}
 		models := applyModelHealth(governedModels, health)

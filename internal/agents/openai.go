@@ -357,7 +357,7 @@ func (c *Client) generateWithPolicy(ctx context.Context, workflowID, schemaName,
 	} else {
 		trace.SelectedModelID = c.model
 		trace.SelectedModelKey = c.model
-		trace.RouteReason = "V3 model router disabled"
+		trace.RouteReason = "Agent Platform model router disabled"
 	}
 	safety := sha256.Sum256([]byte("ai-sdlc-factory:" + workflowID))
 	maxOutputTokens := policy.MaxOutputTokens

@@ -77,7 +77,7 @@ func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error
 		return e.architecture().generate(ctx, payload)
 	case "evaluation.run":
 		if !e.v3.Evaluation {
-			return errors.New("V3 evaluation is disabled")
+			return errors.New("Agent Platform evaluation is disabled")
 		}
 		var payload EvaluationRunEvent
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {

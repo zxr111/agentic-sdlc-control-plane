@@ -1,12 +1,12 @@
-# V3 实施计划
+# Agent 平台实施计划
 
-V3 作为一个完整目标交付，但实施过程采用可验证里程碑。每个里程碑结束时，主分支必须保持可构建、可迁移、可回滚和兼容现有 V2 工作流。
+Agent 平台作为一个完整目标交付，但实施过程采用可验证里程碑。每个里程碑结束时，主分支必须保持可构建、可迁移、可回滚和兼容现有交付工作流。
 
 ## 里程碑 0：基线与重构
 
 交付：
 
-- 建立 V3 Feature Flags。
+- 建立 Agent 平台 Feature Flags。
 - 将 `engine.go` 按 Intake、Planning、Architecture、Execution、Quality、Release、Incident 拆分。
 - 为现有流程补齐 Characterization Tests。
 - 固化 V2 端到端基线和数据库快照。
@@ -83,7 +83,7 @@ V3 作为一个完整目标交付，但实施过程采用可验证里程碑。�
 
 交付：
 
-- V3 Dashboard 页面。
+- Agent 平台 Dashboard 页面。
 - Compose 中的 Agent Runtime 与 pgvector。
 - Kubernetes Deployment、NetworkPolicy、Secret 和资源限制。
 - 完整测试环境 Runbook。
@@ -132,4 +132,3 @@ kubectl kustomize deploy/overlays/test
 ```
 
 引入 Python Agent Runtime 后还需执行单元、契约、RAG、评测和安全测试。端到端测试使用专用 GitLab 项目、合成 Confluence 页面和无生产权限的测试凭据。
-

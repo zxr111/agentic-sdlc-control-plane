@@ -1,4 +1,4 @@
-# V3 测试环境部署与验收手册
+# Agent 平台测试环境部署与验收手册
 
 ## 前置条件
 
@@ -15,7 +15,7 @@
 
 1. 备份测试数据库并确认可回滚。
 2. 运行迁移 Job，确认 `schema_migrations` 已包含 `005_v3_pgvector.sql`。
-3. 保持全部 V3 开关关闭，部署 API 和 Worker，验证 V2 基线。
+3. 保持全部 Agent 平台开关关闭，部署 API 和 Worker，验证交付工作流基线。
 4. 依次开启 Registry、Context Manifest、Evaluation、RAG、Memory、Multi-Agent、Tool Gateway、Model Router。
 5. 每开启一个开关，完成对应检查后再继续；失败时关闭当前开关并回滚镜像。
 
@@ -72,8 +72,8 @@ kubectl -n ai-factory-test port-forward service/ai-sdlc-factory 18080:8080
 
 ## 回滚
 
-- 先关闭本次启用的 V3 Feature Flag，再回滚 Deployment 镜像。
-- 数据库迁移向前兼容，不删除 V3 表和证据；V2 代码会忽略这些表。
+- 先关闭本次启用的 Agent 平台 Feature Flag，再回滚 Deployment 镜像。
+- 数据库迁移向前兼容，不删除 Agent 平台表和证据；旧版交付工作流代码会忽略这些表。
 - 不删除数据库卷，不修改生产配置。
 - 队列出现死信时先保留关联 Run ID，再使用修复后的镜像重试，不篡改审计记录。
 
