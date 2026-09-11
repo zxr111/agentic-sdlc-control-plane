@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
 
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 )
 
@@ -25,6 +27,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer repository.Close()
+	if embeddingURL := os.Getenv("RAG_EMBEDDING_URL"); embeddingURL != "" {
+		embeddingModel := os.Getenv("RAG_EMBEDDING_MODEL")
+		if embeddingModel == "" {
+			logger.Error("RAG_EMBEDDING_MODEL is required when RAG_EMBEDDING_URL is configured")
+			os.Exit(1)
+		}
+		repository.SetKnowledgeProviders(knowledge.HTTPEmbedder{BaseURL: embeddingURL,
+			Token: os.Getenv("RAG_EMBEDDING_TOKEN"), Model: embeddingModel,
+			Client: &http.Client{Timeout: 60 * time.Second}}, nil)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	interval := 30 * time.Second
@@ -61,6 +73,13 @@ func indexBatch(ctx context.Context, repository *store.Store, logger *slog.Logge
 		if created {
 			logger.Info("knowledge source indexed", "source_type", source.SourceType, "source_key", source.SourceKey, "source_version", source.SourceVersion, "project_id", strconv.FormatInt(source.ProjectID, 10))
 		}
+	}
+	backfilled, err := repository.BackfillKnowledgeEmbeddings(ctx, 100)
+	if err != nil {
+		return err
+	}
+	if backfilled > 0 {
+		logger.Info("knowledge embeddings backfilled", "chunks", backfilled)
 	}
 	return nil
 }

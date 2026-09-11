@@ -33,6 +33,8 @@ spec:
               value: http://ai-sdlc-factory-agent-runtime:8090
             - name: AGENT_RUNTIME_SHARED_SECRET
               valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: AGENT_RUNTIME_SHARED_SECRET}}
+            - name: RAG_EMBEDDING_TOKEN
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: AGENT_RUNTIME_SHARED_SECRET}}
             - name: WORKER_ID
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - name: WORKER_EVENT_TYPES

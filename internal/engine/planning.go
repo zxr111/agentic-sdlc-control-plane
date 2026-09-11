@@ -9,6 +9,7 @@ import (
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/agents"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
 	"github.com/google/uuid"
 )
 
@@ -40,6 +41,10 @@ func (e *Engine) publishRequirementGate(ctx context.Context, workflow domain.Wor
 	}
 	review, trace, err := e.agents.ReviewRequirementWithPrompt(runCtx, runID, agentContext, feedback, runtimePrompt)
 	if err != nil {
+		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
+		return err
+	}
+	if err := knowledge.ValidateCitationReferences(review.Citations, agentContext); err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
 	}
@@ -181,6 +186,14 @@ func (e *Engine) publishPlanningGates(ctx context.Context, workflow domain.Workf
 		_ = e.store.FinishAgentRunWithTrace(ctx, prdRunID, "COMPLETED", "", storeTrace(prdTrace), nil)
 		_ = e.store.FinishAgentRunWithTrace(ctx, testRunID, "FAILED", "", storeTrace(testTrace), testErr)
 		return testErr
+	}
+	if err := knowledge.ValidateCitationReferences(prd.Citations, source); err != nil {
+		_ = e.store.FinishAgentRunWithTrace(ctx, prdRunID, "FAILED", "", storeTrace(prdTrace), err)
+		return err
+	}
+	if err := knowledge.ValidateCitationReferences(tests.Citations, testSource); err != nil {
+		_ = e.store.FinishAgentRunWithTrace(ctx, testRunID, "FAILED", "", storeTrace(testTrace), err)
+		return err
 	}
 	prdRaw, _ := json.Marshal(prd)
 	testRaw, _ := json.Marshal(tests)

@@ -97,6 +97,10 @@ spec:
             matchLabels:
               app.kubernetes.io/name: ai-sdlc-factory
               app.kubernetes.io/component: evaluation-worker
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-sdlc-factory
+              app.kubernetes.io/component: knowledge-indexer
       ports:
         - {protocol: TCP, port: 8090}
   egress:
@@ -134,3 +138,11 @@ spec:
     - ports:
         - protocol: TCP
           port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-sdlc-factory
+              app.kubernetes.io/component: agent-runtime
+      ports:
+        - protocol: TCP
+          port: 8090

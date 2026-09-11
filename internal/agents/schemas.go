@@ -5,6 +5,7 @@ import "encoding/json"
 var requirementSchema = json.RawMessage(`{
   "type":"object","additionalProperties":false,
   "properties":{
+	"citations":{"type":"array","items":{"type":"string","pattern":"^K-[0-9]{3}$"}},
     "decision":{"type":"string","enum":["changes_requested","ready_for_human_approval"]},
     "goal":{"type":"string"},"summary":{"type":"string"},
     "facts":{"type":"array","items":{"type":"string"}},
@@ -32,7 +33,7 @@ var requirementSchema = json.RawMessage(`{
       "dependencies":{"type":"array","items":{"type":"string"}}
     },"required":["key","title","owner_role","rationale","independent_boundary","dependencies"]}}
   },
-  "required":["decision","goal","summary","facts","inferences","questions","in_scope","out_of_scope",
+  "required":["citations","decision","goal","summary","facts","inferences","questions","in_scope","out_of_scope",
     "constraints","failure_modes","risks","acceptance_criteria","work_items"]
 }`)
 
@@ -48,6 +49,7 @@ var requirementEntrySchema = `{"type":"object","additionalProperties":false,"pro
 var prdSchema = json.RawMessage(`{
   "type":"object","additionalProperties":false,
   "properties":{
+	"citations":{"type":"array","items":{"type":"string","pattern":"^K-[0-9]{3}$"}},
     "problem":{"type":"string"},"goal":{"type":"string"},
     "personas":{"type":"array","items":{"type":"string"}},
     "user_journeys":{"type":"array","items":{"type":"string"}},
@@ -61,7 +63,7 @@ var prdSchema = json.RawMessage(`{
     "observability":{"type":"array","items":{"type":"string"}},
     "open_questions":{"type":"array","items":` + questionSchema + `}
   },
-  "required":["problem","goal","personas","user_journeys","functional_requirements",
+  "required":["citations","problem","goal","personas","user_journeys","functional_requirements",
     "non_functional_requirements","data_contracts","dependencies","out_of_scope",
     "rollout","rollback","observability","open_questions"]
 }`)
@@ -69,6 +71,7 @@ var prdSchema = json.RawMessage(`{
 var testPlanSchema = json.RawMessage(`{
   "type":"object","additionalProperties":false,
   "properties":{
+	"citations":{"type":"array","items":{"type":"string","pattern":"^K-[0-9]{3}$"}},
     "decision":{"type":"string","enum":["changes_requested","ready_for_human_approval"]},
     "coverage_summary":{"type":"string"},
     "blockers":{"type":"array","items":{"type":"string"}},
@@ -94,12 +97,13 @@ var testPlanSchema = json.RawMessage(`{
       "gaps":{"type":"array","items":{"type":"string"}}
     },"required":["acceptance_criterion","test_cases","dimensions","gaps"]}}
   },
-  "required":["decision","coverage_summary","blockers","residual_risks","test_cases","coverage_matrix"]
+  "required":["citations","decision","coverage_summary","blockers","residual_risks","test_cases","coverage_matrix"]
 }`)
 
 var architectureSchema = json.RawMessage(`{
   "type":"object","additionalProperties":false,
   "properties":{
+	"citations":{"type":"array","items":{"type":"string","pattern":"^K-[0-9]{3}$"}},
     "decision":{"type":"string","enum":["changes_requested","ready_for_human_approval"]},
     "context":{"type":"string"},"approach":{"type":"string"},
     "components":{"type":"array","items":{"type":"string"}},
@@ -120,7 +124,7 @@ var architectureSchema = json.RawMessage(`{
       "ci_requirements":{"type":"array","items":{"type":"string"}}
     },"required":["work_item_key","repository","likely_paths","verification","ci_requirements"]}}
   },
-  "required":["decision","context","approach","components","data_changes","interfaces","security",
+  "required":["citations","decision","context","approach","components","data_changes","interfaces","security",
     "observability","migration_plan","rollout","rollback","architecture_deviations","risks",
     "open_questions","implementation_units"]
 }`)

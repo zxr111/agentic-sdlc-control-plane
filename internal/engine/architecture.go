@@ -7,6 +7,7 @@ import (
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/agents"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
 	"github.com/google/uuid"
 )
 
@@ -64,6 +65,10 @@ func (e *Engine) generateArchitecture(ctx context.Context, event GenerateArchite
 	value, trace, err := e.agents.GenerateArchitectureWithPrompt(runCtx, runID, agentContext,
 		string(requirement.Content), string(prd.Content), string(testPlan.Content), event.Feedback, runtimePrompt)
 	if err != nil {
+		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
+		return err
+	}
+	if err := knowledge.ValidateCitationReferences(value.Citations, agentContext); err != nil {
 		_ = e.store.FinishAgentRunWithTrace(ctx, runID, "FAILED", "", storeTrace(trace), err)
 		return err
 	}

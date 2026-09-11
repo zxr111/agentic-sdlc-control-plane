@@ -16,7 +16,7 @@ const EmbeddingDimensions = 64
 // source content to a third-party embedding service.
 func EmbedText(value string) []float64 {
 	vector := make([]float64, EmbeddingDimensions)
-	for _, token := range tokens(value) {
+	for _, token := range semanticTokens(value) {
 		digest := sha256.Sum256([]byte(token))
 		index := int(binary.BigEndian.Uint64(digest[:8]) % EmbeddingDimensions)
 		sign := 1.0

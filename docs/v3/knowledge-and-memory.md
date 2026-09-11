@@ -61,6 +61,24 @@ Agentic RAG 最多允许有限轮查询改写。每轮保存查询、结果、�
 
 超过单来源 Context 上限时采用确定性的首尾抽取压缩。原始快照与 Hash 保持不变，Context Entry 保存实际传输内容 Hash、`extractive-head-tail-v1` 方法及原始来源 Hash，压缩结果不能覆盖权威原文。
 
+## 可运行检索流水线
+
+知识摄取现在按 `ParseDocument -> NormalizeText -> ChunkDocument -> EmbedDocuments` 执行。Markdown/HTML 标题路径会进入 Chunk 元数据；中文本地回退向量使用字符与双字特征，长中文章节不会再退化为单个 Chunk。每个知识版本保存 Parser/Cleaner 版本，每个 Chunk 保存 Chunker/Embedding 模型版本。
+
+默认 Embedding 是可重放的本地实现。测试环境可配置一个经过批准、兼容 OpenAI `/embeddings` 协议的凭据隔离服务：
+
+```text
+RAG_EMBEDDING_URL=http://ai-sdlc-factory-agent-runtime:8090
+RAG_EMBEDDING_MODEL=<approved-model-version>
+RAG_EMBEDDING_TOKEN=<agent-runtime-shared-secret>
+```
+
+索引和在线查询必须使用相同模型版本以及 64 维输出。切换模型时应构建新索引、运行版本化评测集，再通过治理流程激活，不能原地改写旧版本的审计证据。
+
+在线路径执行 `UnderstandQuery -> lexical/vector recall -> RRF -> Reranker -> authority/diversity/token-budget selection`。最终补充知识使用 `K-NNN` Evidence ID 写入 Context Manifest。模型只能返回本次 Context 中存在的 Citation ID；伪造 ID 会使 Agent Run 失败。
+
+`rag_evaluation_cases` 和 `rag_evaluation_results` 保存版本化离线数据集与 Recall@K、MRR、nDCG、引用和无依据声明指标。跨项目泄露、撤销来源命中和伪造引用必须保持为零，才能进入 Canary。
+
 ## 项目记忆
 
 项目记忆是受治理的工程知识，不是自由形式聊天历史。类型包括：

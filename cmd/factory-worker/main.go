@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/engine"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/routing"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/tooling"
@@ -35,6 +37,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer repository.Close()
+	if embeddingURL := os.Getenv("RAG_EMBEDDING_URL"); embeddingURL != "" {
+		embeddingModel := os.Getenv("RAG_EMBEDDING_MODEL")
+		if embeddingModel == "" {
+			logger.Error("RAG_EMBEDDING_MODEL is required when RAG_EMBEDDING_URL is configured")
+			os.Exit(1)
+		}
+		repository.SetKnowledgeProviders(knowledge.HTTPEmbedder{BaseURL: embeddingURL,
+			Token: os.Getenv("RAG_EMBEDDING_TOKEN"), Model: embeddingModel,
+			Client: &http.Client{Timeout: 60 * time.Second}}, nil)
+	}
 	registryOwner := cfg.ComponentMode == "worker" || cfg.ComponentMode == "legacy"
 	if cfg.V3.Registry && registryOwner {
 		definitions := agents.BuiltinDefinitions()

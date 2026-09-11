@@ -12,8 +12,8 @@ GRANT SELECT ON
     prompt_definitions, prompt_versions, model_providers, model_versions, model_policies,
     agent_profiles, agent_profile_versions, skill_definitions, skill_versions,
     tool_definitions, tool_versions, tool_policies, knowledge_documents,
-    knowledge_versions, knowledge_chunks, project_memories, evaluation_suites,
-    evaluation_cases
+    knowledge_versions, knowledge_chunks, knowledge_chunk_embeddings, project_memories, evaluation_suites,
+    evaluation_cases, rag_evaluation_cases, rag_evaluation_results
 TO ai_factory_agent;
 
 GRANT SELECT, INSERT, UPDATE ON
@@ -27,14 +27,15 @@ GRANT SELECT ON
     schema_migrations, workflows, source_snapshots, artifacts, gates,
     prompt_definitions, prompt_versions, model_providers, model_versions, model_policies,
     agent_profiles, agent_profile_versions, tool_definitions, tool_versions,
-    evaluation_suites, evaluation_cases,
-    evaluation_case_revisions
+    evaluation_suites, evaluation_cases, evaluation_case_revisions,
+    knowledge_documents, knowledge_versions, knowledge_chunks, knowledge_chunk_embeddings,
+    rag_evaluation_cases
 TO ai_factory_evaluation;
 
 GRANT SELECT, INSERT, UPDATE ON
     event_queue, evaluation_runs, evaluation_outputs, evaluation_scores,
     evaluation_comparisons, blind_reviews, blind_review_submissions,
-    canary_releases, model_health_events
+    canary_releases, model_health_events, rag_evaluation_results
 TO ai_factory_evaluation;
 
 REVOKE ALL ON schema_migrations FROM ai_factory_agent, ai_factory_evaluation;

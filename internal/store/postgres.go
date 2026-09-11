@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -24,7 +25,9 @@ var migrationFiles embed.FS
 var ErrNotFound = errors.New("not found")
 
 type Store struct {
-	db *sql.DB
+	db                *sql.DB
+	knowledgeEmbedder knowledge.Embedder
+	knowledgeReranker knowledge.Reranker
 }
 
 func Open(databaseURL string) (*Store, error) {
@@ -35,7 +38,16 @@ func Open(databaseURL string) (*Store, error) {
 	db.SetConnMaxLifetime(5 * time.Minute)
 	db.SetMaxOpenConns(20)
 	db.SetMaxIdleConns(10)
-	return &Store{db: db}, nil
+	return &Store{db: db, knowledgeEmbedder: knowledge.LocalEmbedder{}, knowledgeReranker: knowledge.DeterministicReranker{}}, nil
+}
+
+func (s *Store) SetKnowledgeProviders(embedder knowledge.Embedder, reranker knowledge.Reranker) {
+	if embedder != nil {
+		s.knowledgeEmbedder = embedder
+	}
+	if reranker != nil {
+		s.knowledgeReranker = reranker
+	}
 }
 
 func (s *Store) Close() error { return s.db.Close() }

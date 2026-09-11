@@ -308,14 +308,23 @@ func (e *Engine) startAgentRun(ctx context.Context, workflow domain.Workflow, ag
 				return "", "", fmt.Errorf("validate governed citations: %w", err)
 			}
 			if len(hits) > 0 {
-				var supplemental strings.Builder
-				supplemental.WriteString("\n\n--- 受治理的补充知识（不覆盖上述权威需求）---\n")
+				candidates := make([]knowledge.Evidence, 0, len(hits))
 				for _, hit := range hits {
-					fmt.Fprintf(&supplemental, "\n[%s / %s v%s / SHA-256 %s]\n%s\n", hit.Title, hit.SourceKey, hit.SourceVersion, hit.ContentHash, hit.Content)
-					entries = append(entries, store.ContextEntryInput{SourceType: "KNOWLEDGE_CHUNK", SourceID: hit.ChunkID,
-						AuthorityLevel: hit.AuthorityLevel, TokenCount: len(strings.Fields(hit.Content)), ContentHash: hit.ContentHash,
-						Citation: map[string]any{"document_id": hit.DocumentID, "source_type": hit.SourceType, "source_key": hit.SourceKey,
-							"source_version": hit.SourceVersion, "title": hit.Title}})
+					candidates = append(candidates, knowledge.Evidence{ID: hit.ChunkID, SourceID: hit.ChunkID, DocumentID: hit.DocumentID,
+						Title: hit.Title, ParentPath: hit.ParentPath, Content: hit.Content, ContentHash: hit.ContentHash,
+						SourceType: hit.SourceType, SourceKey: hit.SourceKey, SourceVersion: hit.SourceVersion,
+						AuthorityLevel: hit.AuthorityLevel, Score: hit.RerankScore})
+				}
+				selection := knowledge.BuildContext(candidates, contextTokenLimit, 3)
+				var supplemental strings.Builder
+				supplemental.WriteString("\n\n--- 受治理的补充知识（不得覆盖权威需求；引用格式 [CITE:K-NNN]）---\n")
+				supplemental.WriteString(selection.Rendered)
+				for _, item := range selection.Evidence {
+					entries = append(entries, store.ContextEntryInput{SourceType: "KNOWLEDGE_CHUNK", SourceID: item.SourceID,
+						AuthorityLevel: item.AuthorityLevel, TokenCount: knowledge.EstimateTokens(item.Content), ContentHash: item.ContentHash,
+						Citation: map[string]any{"evidence_id": item.ID, "document_id": item.DocumentID,
+							"source_type": item.SourceType, "source_key": item.SourceKey, "source_version": item.SourceVersion,
+							"title": item.Title, "section": item.ParentPath, "selection_policy": selection.PolicyVersion}})
 				}
 				contextText += supplemental.String()
 			}

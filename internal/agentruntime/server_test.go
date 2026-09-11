@@ -60,3 +60,32 @@ func TestRuntimeEnforcesContractAndReplacesProviderCredential(t *testing.T) {
 		t.Fatalf("invalid status=%d", invalid.Code)
 	}
 }
+
+func TestRuntimeProxiesGovernedEmbeddings(t *testing.T) {
+	runtime, err := New("https://provider.example/v1", "provider-secret", "internal-secret", slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.httpClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/v1/embeddings" || request.Header.Get("Authorization") != "Bearer provider-secret" {
+			t.Fatalf("unexpected provider request %s", request.URL.String())
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"data":[{"index":0,"embedding":[0]}]}`))}, nil
+	})}
+	valid := `{"model":"embedding-v1","input":["refund policy"],"dimensions":64}`
+	request := httptest.NewRequest(http.MethodPost, "http://runtime/embeddings", strings.NewReader(valid))
+	request.Header.Set("Authorization", "Bearer internal-secret")
+	response := httptest.NewRecorder()
+	runtime.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	invalid := httptest.NewRequest(http.MethodPost, "http://runtime/embeddings", strings.NewReader(strings.Replace(valid, "64", "1536", 1)))
+	invalid.Header.Set("Authorization", "Bearer internal-secret")
+	invalidResponse := httptest.NewRecorder()
+	runtime.Routes().ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid dimensions status=%d", invalidResponse.Code)
+	}
+}

@@ -34,6 +34,15 @@ spec:
                   key: DATABASE_URL
             - name: KNOWLEDGE_INDEX_INTERVAL
               value: 30s
+            - name: RAG_EMBEDDING_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-sdlc-factory-secrets
+                  key: AGENT_RUNTIME_SHARED_SECRET
+                  optional: true
+          envFrom:
+            - configMapRef:
+                name: ai-sdlc-factory-config
           resources:
             requests:
               cpu: 100m

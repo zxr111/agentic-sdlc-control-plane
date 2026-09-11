@@ -60,7 +60,64 @@ func (s *Server) Routes() http.Handler {
 		_, _ = io.WriteString(w, `{"status":"ok"}`)
 	})
 	mux.HandleFunc("POST /responses", s.responses)
+	mux.HandleFunc("POST /embeddings", s.embeddings)
 	return mux
+}
+
+type governedEmbeddingRequest struct {
+	Model      string   `json:"model"`
+	Input      []string `json:"input"`
+	Dimensions int      `json:"dimensions"`
+}
+
+func (s *Server) embeddings(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+	if err != nil {
+		http.Error(w, "request is too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	var request governedEmbeddingRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		http.Error(w, "invalid JSON request", http.StatusBadRequest)
+		return
+	}
+	if request.Model == "" || request.Dimensions != 64 || len(request.Input) == 0 || len(request.Input) > 64 {
+		http.Error(w, "request violates embedding policy", http.StatusUnprocessableEntity)
+		return
+	}
+	for _, value := range request.Input {
+		if strings.TrimSpace(value) == "" || len(value) > 128*1024 {
+			http.Error(w, "embedding input violates policy", http.StatusUnprocessableEntity)
+			return
+		}
+	}
+	providerRequest, err := http.NewRequestWithContext(r.Context(), http.MethodPost, s.providerURL+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "provider request failed", http.StatusBadGateway)
+		return
+	}
+	providerRequest.Header.Set("Authorization", "Bearer "+s.providerKey)
+	providerRequest.Header.Set("Content-Type", "application/json")
+	providerRequest.Header.Set("Accept", "application/json")
+	response, err := s.httpClient.Do(providerRequest)
+	if err != nil {
+		s.logger.Warn("embedding provider request failed", "error", err)
+		http.Error(w, "embedding provider unavailable", http.StatusBadGateway)
+		return
+	}
+	defer response.Body.Close()
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if readErr != nil || len(responseBody) > maxResponseBytes {
+		http.Error(w, "embedding provider response is invalid", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, _ = w.Write(responseBody)
 }
 
 type governedRequest struct {

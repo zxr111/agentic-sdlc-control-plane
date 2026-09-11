@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
-	"strings"
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
@@ -24,6 +23,7 @@ type KnowledgeSource struct {
 	AuthorityLevel int
 	AccessScope    any
 	Content        string
+	ContentType    string
 	ParentPath     string
 }
 
@@ -74,17 +74,17 @@ func (s *Store) retrieveKnowledge(ctx context.Context, workflowID, agentRunID st
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	queries := []string{strings.TrimSpace(query)}
-	if rewritten := knowledge.RewriteQuery(query); rewritten != "" && rewritten != strings.ToLower(strings.TrimSpace(query)) {
-		queries = append(queries, rewritten)
-	}
+	plan := knowledge.UnderstandQuery(query)
+	queries := plan.Queries
 	type retrievalRound struct {
 		id, query string
 		hits      []KnowledgeHit
 	}
 	rounds := make([]retrievalRound, 0, len(queries))
 	var parentID string
-	filters, _ := json.Marshal(map[string]any{"project_scoped": true, "minimum_authority": minimumAuthority})
+	filters, _ := json.Marshal(map[string]any{"project_scoped": true, "minimum_authority": minimumAuthority,
+		"intent": plan.Intent, "required_terms": plan.RequiredTerms, "source_types": plan.SourceTypes,
+		"embedder": s.knowledgeEmbedder.ModelVersion(), "reranker": s.knowledgeReranker.ModelVersion()})
 	for index, currentQuery := range queries {
 		runID := uuid.NewString()
 		var parent any
@@ -93,16 +93,13 @@ func (s *Store) retrieveKnowledge(ctx context.Context, workflowID, agentRunID st
 		}
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO retrieval_runs
 			(id,workflow_id,agent_run_id,query_text,filters_json,strategy,iteration,parent_run_id,rewritten_from)
-			VALUES ($1,$2,$3,$4,$5,'HYBRID_RRF_AGENTIC_V1',$6,$7,$8)`, runID, workflowID,
+			VALUES ($1,$2,$3,$4,$5,'HYBRID_RRF_RERANK_V2',$6,$7,$8)`, runID, workflowID,
 			nullableUUID(agentRunID), currentQuery, string(filters), index+1, parent, query); err != nil {
 			return nil, err
 		}
 		hits, err := s.SearchKnowledge(ctx, projectID, currentQuery, minimumAuthority, limit*2)
 		if err != nil {
 			return nil, err
-		}
-		for hitIndex := range hits {
-			hits[hitIndex].RerankScore += float64(hits[hitIndex].AuthorityLevel) / 1000
 		}
 		rounds = append(rounds, retrievalRound{id: runID, query: currentQuery, hits: hits})
 		parentID = runID
@@ -165,7 +162,7 @@ func (s *Store) retrieveKnowledge(ctx context.Context, workflowID, agentRunID st
 	}
 	for _, round := range rounds {
 		if _, err := tx.ExecContext(ctx, `UPDATE retrieval_runs SET finished_at=CURRENT_TIMESTAMP,
-			selection_reason='authority then reciprocal-rank fusion',stop_reason=$1 WHERE id=$2`, stopReason, round.id); err != nil {
+			selection_reason='authority, reciprocal-rank fusion, deterministic rerank, context diversity',stop_reason=$1 WHERE id=$2`, stopReason, round.id); err != nil {
 			return nil, err
 		}
 	}
@@ -190,6 +187,31 @@ func (s *Store) IngestKnowledge(ctx context.Context, source KnowledgeSource) (st
 	digest := sha256.Sum256([]byte(source.Content))
 	contentHash := hex.EncodeToString(digest[:])
 	scope, err := json.Marshal(source.AccessScope)
+	if err != nil {
+		return "", false, err
+	}
+	var alreadyIndexed string
+	err = s.db.QueryRowContext(ctx, `SELECT kv.id FROM knowledge_documents kd JOIN knowledge_versions kv ON kv.document_id=kd.id
+		WHERE kd.project_id=$1 AND kd.source_type=$2 AND kd.source_key=$3 AND kv.source_version=$4`,
+		source.ProjectID, source.SourceType, source.SourceKey, source.SourceVersion).Scan(&alreadyIndexed)
+	if err == nil {
+		return alreadyIndexed, false, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", false, err
+	}
+	parsed, err := knowledge.ParseDocument(source.SourceType, source.ContentType, []byte(source.Content))
+	if err != nil {
+		return "", false, err
+	}
+	normalized := knowledge.NormalizeText(parsed.Content)
+	normalizedDigest := sha256.Sum256([]byte(normalized))
+	chunks := knowledge.ChunkDocument(normalized, source.ParentPath, 400, 50)
+	embeddingInputs := make([]string, len(chunks))
+	for index, chunk := range chunks {
+		embeddingInputs[index] = source.Title + "\n" + chunk.ParentPath + "\n" + chunk.Content
+	}
+	vectors, err := s.knowledgeEmbedder.EmbedDocuments(ctx, embeddingInputs)
 	if err != nil {
 		return "", false, err
 	}
@@ -223,15 +245,27 @@ func (s *Store) IngestKnowledge(ctx context.Context, source KnowledgeSource) (st
 		return "", false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_versions
-		(id,document_id,source_version,content_hash,raw_content,status) VALUES ($1,$2,$3,$4,$5,'ACTIVE')`,
-		versionID, documentID, source.SourceVersion, contentHash, source.Content); err != nil {
+		(id,document_id,source_version,content_hash,raw_content,normalized_content,normalized_hash,
+		 parser_version,cleaner_version,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'ACTIVE')`,
+		versionID, documentID, source.SourceVersion, contentHash, source.Content, normalized,
+		hex.EncodeToString(normalizedDigest[:]), parsed.ParserVersion, knowledge.CleanerVersion); err != nil {
 		return "", false, err
 	}
-	for _, chunk := range knowledge.ChunkText(source.Content, source.ParentPath, 400, 50) {
+	for index, chunk := range chunks {
+		chunkID := uuid.NewString()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_chunks
-			(id,knowledge_version_id,chunk_index,parent_path,content,token_count,content_hash,embedding)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8::vector)`, uuid.NewString(), versionID, chunk.Index, chunk.ParentPath,
-			chunk.Content, chunk.TokenCount, chunk.Hash, knowledge.VectorLiteral(knowledge.EmbedText(chunk.Content))); err != nil {
+			(id,knowledge_version_id,chunk_index,parent_path,content,token_count,content_hash,embedding,
+			 chunker_version,embedding_model)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8::vector,$9,$10)`, chunkID, versionID, chunk.Index, chunk.ParentPath,
+			chunk.Content, chunk.TokenCount, chunk.Hash, knowledge.VectorLiteral(vectors[index]),
+			knowledge.ChunkerVersion, s.knowledgeEmbedder.ModelVersion()); err != nil {
+			return "", false, err
+		}
+		inputDigest := sha256.Sum256([]byte(embeddingInputs[index]))
+		if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_chunk_embeddings
+			(knowledge_chunk_id,model_version,dimensions,input_hash,embedding) VALUES ($1,$2,$3,$4,$5::vector)`,
+			chunkID, s.knowledgeEmbedder.ModelVersion(), s.knowledgeEmbedder.Dimensions(),
+			hex.EncodeToString(inputDigest[:]), knowledge.VectorLiteral(vectors[index])); err != nil {
 			return "", false, err
 		}
 	}
@@ -248,7 +282,11 @@ func (s *Store) SearchKnowledge(ctx context.Context, projectID int64, query stri
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	embedding := knowledge.VectorLiteral(knowledge.EmbedText(query))
+	queryVector, err := s.knowledgeEmbedder.EmbedQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	embedding := knowledge.VectorLiteral(queryVector)
 	rows, err := s.db.QueryContext(ctx, `WITH candidates AS (
 		SELECT kc.*,kd.id document_id,kd.source_type,kd.source_key,kd.title,kd.authority_level,kv.source_version,kv.fetched_at
 		FROM knowledge_chunks kc JOIN knowledge_versions kv ON kv.id=kc.knowledge_version_id
@@ -259,9 +297,10 @@ func (s *Store) SearchKnowledge(ctx context.Context, projectID int64, query stri
 		row_number() OVER (ORDER BY ts_rank_cd(search_vector,plainto_tsquery('simple',$2)) DESC) rank
 		FROM candidates WHERE search_vector @@ plainto_tsquery('simple',$2) LIMIT $4
 	), semantic AS (
-		SELECT id,1-(embedding <=> $5::vector) score,
-		row_number() OVER (ORDER BY embedding <=> $5::vector) rank
-		FROM candidates WHERE embedding IS NOT NULL LIMIT $4
+		SELECT c.id,1-(ke.embedding <=> $5::vector) score,
+		row_number() OVER (ORDER BY ke.embedding <=> $5::vector) rank
+		FROM candidates c JOIN knowledge_chunk_embeddings ke ON ke.knowledge_chunk_id=c.id
+		WHERE ke.model_version=$6 ORDER BY ke.embedding <=> $5::vector LIMIT $4
 	), fused AS (
 		SELECT id,sum(rrf) score,max(lexical_score) lexical_score,max(vector_score) vector_score FROM (
 			SELECT id,1.0/(60+rank) rrf,score lexical_score,0::double precision vector_score FROM lexical
@@ -272,7 +311,7 @@ func (s *Store) SearchKnowledge(ctx context.Context, projectID int64, query stri
 		c.content_hash,c.authority_level,f.lexical_score,f.vector_score,f.score
 	FROM fused f JOIN candidates c ON c.id=f.id
 	ORDER BY c.authority_level DESC,f.score DESC,c.fetched_at DESC LIMIT $4`,
-		projectID, query, minimumAuthority, limit, embedding)
+		projectID, query, minimumAuthority, limit, embedding, s.knowledgeEmbedder.ModelVersion())
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +326,25 @@ func (s *Store) SearchKnowledge(ctx context.Context, projectID int64, query stri
 		}
 		hits = append(hits, hit)
 	}
-	return hits, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	plan := knowledge.UnderstandQuery(query)
+	candidates := make([]knowledge.Candidate, len(hits))
+	for index, hit := range hits {
+		candidates[index] = knowledge.Candidate{Content: hit.Content, ParentPath: hit.ParentPath,
+			AuthorityLevel: hit.AuthorityLevel, LexicalScore: hit.LexicalScore,
+			VectorScore: hit.VectorScore, FusedScore: hit.RerankScore}
+	}
+	scores, err := s.knowledgeReranker.Rerank(ctx, plan, candidates)
+	if err != nil {
+		return nil, err
+	}
+	for index := range hits {
+		hits[index].RerankScore = scores[index]
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].RerankScore > hits[j].RerankScore })
+	return hits, nil
 }
 
 type ProjectMemory struct {
