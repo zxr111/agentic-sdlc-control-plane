@@ -25,6 +25,11 @@ type GenerateArchitectureEvent struct {
 	Feedback   string `json:"feedback,omitempty"`
 }
 
+type GenerateSDDEvent struct {
+	WorkflowID string `json:"workflow_id"`
+	Feedback   string `json:"feedback,omitempty"`
+}
+
 type EvaluationRunEvent struct {
 	SuiteID         string `json:"suite_id"`
 	PromptVersionID string `json:"prompt_version_id"`
@@ -75,6 +80,12 @@ func (e *Engine) HandleEvent(ctx context.Context, event domain.QueueEvent) error
 			return err
 		}
 		return e.architecture().generate(ctx, payload)
+	case "workflow.generate_sdd":
+		var payload GenerateSDDEvent
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		return e.sdd().generate(ctx, payload)
 	case "evaluation.run":
 		if !e.v3.Evaluation {
 			return errors.New("Agent Platform evaluation is disabled")

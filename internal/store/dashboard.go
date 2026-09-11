@@ -199,7 +199,7 @@ func (s *Store) loadDashboardWorkflows(ctx context.Context, result *DashboardDat
 		result.Summary.Total++
 		switch workflow.State {
 		case domain.StateWaitingRequirementReview, domain.StateWaitingPRDAndTestReview,
-			domain.StateWaitingArchitectureReview, domain.StateWaitingReleaseApproval:
+			domain.StateWaitingArchitectureReview, domain.StateWaitingSDDReview, domain.StateWaitingReleaseApproval:
 			result.Summary.WaitingGates++
 		case domain.StateReadyForArchitecture, domain.StateCompleted:
 			result.Summary.Ready++

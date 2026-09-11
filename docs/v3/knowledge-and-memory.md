@@ -10,6 +10,7 @@
 - GitLab Issue、MR、Pipeline 和代码评审记录。
 - 仓库内 README、架构文档、API 契约和迁移文件。
 - 已批准的 Requirement、PRD、Test 和 Architecture Artifact。
+- 已批准的 SDD 微服务变更设计，以及合并后按 Commit SHA 固化的实际影响。
 - Quality Finding、发布验证、回滚和 Incident。
 - 经过 Engineer Approval 的项目记忆。
 
@@ -78,6 +79,12 @@ RAG_EMBEDDING_TOKEN=<agent-runtime-shared-secret>
 在线路径执行 `UnderstandQuery -> lexical/vector recall -> RRF -> Reranker -> authority/diversity/token-budget selection`。最终补充知识使用 `K-NNN` Evidence ID 写入 Context Manifest。模型只能返回本次 Context 中存在的 Citation ID；伪造 ID 会使 Agent Run 失败。
 
 `rag_evaluation_cases` 和 `rag_evaluation_results` 保存版本化离线数据集与 Recall@K、MRR、nDCG、引用和无依据声明指标。跨项目泄露、撤销来源命中和伪造引用必须保持为零，才能进入 Canary。
+
+## SDD 服务影响知识
+
+Architecture Gate 通过后，SDD Agent 将每个已批准工作项拆为结构化服务影响：微服务、仓库、变更类型、功能点、组件/API/数据变化、预计文件路径、验收标准、验证方式和风险。Engineer SDD Gate 通过后，这些记录以 `planned_impacts` 激活；旧版本只会标记为 `SUPERSEDED`，不会覆盖历史证据。
+
+Merge Request 合并时，系统按精确 Commit SHA 读取变更文件，将其与预计路径逐服务比对并写入 `actual_impacts`。实际影响同时以 `ACTUAL_IMPACT` 来源进入 RAG。因此后续需求分析可以检索“某微服务历史上为哪些功能改过什么”，也能区分计划设计、实际落地和架构偏差。
 
 ## 项目记忆
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/connectors/gitlab"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/domain"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/store"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/webhook"
@@ -177,7 +178,7 @@ func (e *Engine) handleLifecycleEvent(ctx context.Context, event webhook.Lifecyc
 		}
 		if mr.State == "merged" || event.Action == "merge" {
 			if item.State == domain.WorkItemMerged || item.State == domain.WorkItemCompleted {
-				return nil
+				return e.captureActualImpact(ctx, workflow, item, mr)
 			}
 			if item.State != domain.WorkItemMergeQueued {
 				if err := e.store.SetWorkItemState(ctx, item.ID, domain.WorkItemBlocked,
@@ -188,6 +189,9 @@ func (e *Engine) handleLifecycleEvent(ctx context.Context, event webhook.Lifecyc
 					"<!-- ai-factory:unauthorized-merge:"+fmt.Sprint(mr.IID)+" -->",
 					"## Delivery blocked\n\nGitLab reports this MR as merged before Factory recorded an exact-SHA Engineer Code Review Gate. "+
 						"Factory will not advance the release. An engineer must investigate and explicitly recover the workflow.")
+			}
+			if err := e.captureActualImpact(ctx, workflow, item, mr); err != nil {
+				return err
 			}
 			if err := e.store.SetWorkItemState(ctx, item.ID, domain.WorkItemMerged,
 				map[string]any{"mr_iid": mr.IID, "head_sha": mr.SHA}); err != nil {
@@ -291,6 +295,30 @@ func (e *Engine) handleLifecycleEvent(ctx context.Context, event webhook.Lifecyc
 	default:
 		return nil
 	}
+}
+
+func (e *Engine) captureActualImpact(ctx context.Context, workflow domain.Workflow, item domain.WorkItem, mr gitlab.MergeRequest) error {
+	if item.Key == "__integration" {
+		return nil
+	}
+	changedPaths, err := e.gitlab.GetMergeRequestChangedPaths(ctx, workflow.GitLabProjectID, mr.IID)
+	if err != nil {
+		return fmt.Errorf("load merged MR impact: %w", err)
+	}
+	if err := e.store.RecordActualImpact(ctx, workflow.ID, item.ID, mr.SHA, changedPaths); err != nil {
+		return fmt.Errorf("record merged MR impact: %w", err)
+	}
+	if e.v3.RAG {
+		content := fmt.Sprintf("Implemented work item %s\nMerge Request !%d\nCommit: %s\nChanged paths:\n- %s",
+			item.Key, mr.IID, mr.SHA, strings.Join(changedPaths, "\n- "))
+		if _, _, err := e.store.IngestKnowledge(ctx, store.KnowledgeSource{ProjectID: workflow.GitLabProjectID,
+			SourceType: "ACTUAL_IMPACT", SourceKey: item.ID, SourceVersion: mr.SHA, Title: "Actual impact: " + item.Key,
+			AuthorityLevel: 80, AccessScope: map[string]any{"gitlab_project_id": workflow.GitLabProjectID},
+			Content: content, ParentPath: "Implemented service impacts"}); err != nil {
+			return fmt.Errorf("index merged MR impact: %w", err)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) ingestRepositoryKnowledge(ctx context.Context, event webhook.LifecycleEvent) error {

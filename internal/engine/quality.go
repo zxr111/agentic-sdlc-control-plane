@@ -146,6 +146,10 @@ func (e *Engine) resumeRecordedDecision(ctx context.Context, workflow domain.Wor
 			if workflow.State != domain.StateWaitingArchitectureReview {
 				return nil
 			}
+		case domain.GateSDD:
+			if workflow.State != domain.StateWaitingSDDReview {
+				return nil
+			}
 		case domain.GateCodeReview:
 			if workflow.State != domain.StateExecutingWorkItems {
 				return nil
@@ -168,6 +172,10 @@ func (e *Engine) resumeRecordedDecision(ctx context.Context, workflow domain.Wor
 		}
 	case domain.GateArchitecture:
 		if workflow.State != domain.StateWaitingArchitectureReview {
+			return nil
+		}
+	case domain.GateSDD:
+		if workflow.State != domain.StateWaitingSDDReview {
 			return nil
 		}
 	case domain.GateCodeReview:
@@ -294,8 +302,26 @@ func (e *Engine) advanceApprovedGate(ctx context.Context, workflow domain.Workfl
 		return e.store.EnqueueEvent(ctx, "generate-architecture:"+workflow.ID+":"+fmt.Sprint(workflow.Revision),
 			"workflow.generate_architecture", GenerateArchitectureEvent{WorkflowID: workflow.ID}, time.Now().UTC())
 	case domain.GateArchitecture:
-		if err := e.store.Transition(ctx, workflow.ID, domain.StatePlanning,
+		if err := e.store.Transition(ctx, workflow.ID, domain.StateSDDGenerating,
 			"architecture gate approved", map[string]any{"gate_id": gate.ID}); err != nil {
+			return err
+		}
+		return e.store.EnqueueEvent(ctx, "generate-sdd:"+workflow.ID+":"+fmt.Sprint(workflow.Revision),
+			"workflow.generate_sdd", GenerateSDDEvent{WorkflowID: workflow.ID}, time.Now().UTC())
+	case domain.GateSDD:
+		artifact, err := e.store.GetArtifact(ctx, gate.ArtifactID)
+		if err != nil {
+			return err
+		}
+		var design agents.SoftwareDesign
+		if err := json.Unmarshal(artifact.Content, &design); err != nil {
+			return err
+		}
+		if err := e.store.SavePlannedImpacts(ctx, workflow, artifact.ID, design); err != nil {
+			return err
+		}
+		if err := e.store.Transition(ctx, workflow.ID, domain.StatePlanning,
+			"software design gate approved", map[string]any{"gate_id": gate.ID, "artifact_id": artifact.ID}); err != nil {
 			return err
 		}
 		project := e.projects[workflow.GitLabProjectID]
@@ -456,6 +482,13 @@ func (e *Engine) reworkGate(ctx context.Context, workflow domain.Workflow, gate 
 		}
 		return e.store.EnqueueEvent(ctx, "regenerate-architecture:"+gate.ID, "workflow.generate_architecture",
 			GenerateArchitectureEvent{WorkflowID: workflow.ID, Feedback: feedback}, time.Now().UTC())
+	case domain.GateSDD:
+		if err := e.store.Transition(ctx, workflow.ID, domain.StateSDDGenerating,
+			"software design gate returned for rework", map[string]any{"gate_id": gate.ID}); err != nil {
+			return err
+		}
+		return e.store.EnqueueEvent(ctx, "regenerate-sdd:"+gate.ID, "workflow.generate_sdd",
+			GenerateSDDEvent{WorkflowID: workflow.ID, Feedback: feedback}, time.Now().UTC())
 	case domain.GateCodeReview:
 		artifact, err := e.store.GetArtifact(ctx, gate.ArtifactID)
 		if err != nil {

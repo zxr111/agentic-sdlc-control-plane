@@ -24,6 +24,8 @@ const (
 	StateReadyForArchitecture      State = "READY_FOR_ARCHITECTURE"
 	StateArchitectureGenerating    State = "ARCHITECTURE_GENERATING"
 	StateWaitingArchitectureReview State = "WAITING_ARCHITECTURE_REVIEW"
+	StateSDDGenerating             State = "SDD_GENERATING"
+	StateWaitingSDDReview          State = "WAITING_SDD_REVIEW"
 	StatePlanning                  State = "PLANNING"
 	StateExecutingWorkItems        State = "EXECUTING_WORK_ITEMS"
 	StateAssemblingRelease         State = "ASSEMBLING_RELEASE"
@@ -48,7 +50,9 @@ var transitions = map[State][]State{
 	StateWaitingPRDAndTestReview:   {StateIngesting, StatePRDGenerating, StateReadyForArchitecture},
 	StateReadyForArchitecture:      {StateIngesting, StateArchitectureGenerating},
 	StateArchitectureGenerating:    {StateWaitingArchitectureReview},
-	StateWaitingArchitectureReview: {StateArchitectureGenerating, StatePlanning},
+	StateWaitingArchitectureReview: {StateArchitectureGenerating, StateSDDGenerating},
+	StateSDDGenerating:             {StateWaitingSDDReview},
+	StateWaitingSDDReview:          {StateSDDGenerating, StatePlanning},
 	StatePlanning:                  {StateExecutingWorkItems},
 	StateExecutingWorkItems:        {StateAssemblingRelease},
 	StateAssemblingRelease:         {StateReleaseCIRunning},
@@ -79,6 +83,7 @@ const (
 	ArtifactPRD                 ArtifactType = "PRD"
 	ArtifactTestPlan            ArtifactType = "TEST_PLAN"
 	ArtifactArchitecture        ArtifactType = "ARCHITECTURE"
+	ArtifactSDD                 ArtifactType = "SOFTWARE_DESIGN_DOCUMENT"
 	ArtifactImplementationPlan  ArtifactType = "IMPLEMENTATION_PLAN"
 	ArtifactQualityReport       ArtifactType = "QUALITY_REPORT"
 	ArtifactReleasePlan         ArtifactType = "RELEASE_PLAN"
@@ -93,6 +98,7 @@ const (
 	GatePRD                 GateType = "PRD"
 	GateTest                GateType = "TEST"
 	GateArchitecture        GateType = "ARCHITECTURE"
+	GateSDD                 GateType = "SDD"
 	GateCodeReview          GateType = "CODE_REVIEW"
 	GateRelease             GateType = "RELEASE"
 	GateIncident            GateType = "INCIDENT"

@@ -148,6 +148,18 @@ func TestV3AgentRunLifecycleMigration(t *testing.T) {
 	}
 }
 
+func TestSDDKnowledgeLayerMigration(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/016_sdd_knowledge_layer.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"service_catalog", "planned_impacts", "actual_impacts"} {
+		if !strings.Contains(string(content), "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("SDD knowledge migration missing %s", table)
+		}
+	}
+}
+
 func TestAgentRunFailureClassification(t *testing.T) {
 	if !retryableAgentRunError(context.DeadlineExceeded) || !retryableAgentRunError(errors.New("provider returned HTTP 503")) {
 		t.Fatal("transient Agent Run failures were not classified as retryable")

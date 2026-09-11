@@ -23,6 +23,8 @@ NEW
 -> READY_FOR_ARCHITECTURE
 -> ARCHITECTURE_GENERATING
 -> WAITING_ARCHITECTURE_REVIEW
+-> SDD_GENERATING
+-> WAITING_SDD_REVIEW
 -> PLANNING
 -> EXECUTING_WORK_ITEMS
 -> ASSEMBLING_RELEASE
@@ -53,6 +55,7 @@ Source changes before architecture invalidate downstream approval and return the
 - `work_items` and `work_item_dependencies`: delivery graph, assigned engineer, branch, target, and acceptance trace.
 - `codex_dispatches`: idempotent visible-task dispatch; no lease columns.
 - `agent_runs`, `merge_requests`, `quality_runs`, and `quality_findings`: exact model/MR/SHA evidence and hard blockers.
+- `service_catalog`, `planned_impacts`, and `actual_impacts`: approved service/function design, implementation paths, acceptance links, and post-merge deviation evidence.
 - `pipeline_runs`, `release_candidates`, `deployments`, and `observation_windows`: immutable delivery evidence.
 - `incidents` and `email_relays`: monitoring intake and idempotent engineer-command relay audit.
 

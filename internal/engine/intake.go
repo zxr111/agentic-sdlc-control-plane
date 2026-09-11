@@ -57,7 +57,8 @@ func (e *Engine) handleIssueChanged(ctx context.Context, event webhook.IssueChan
 	case domain.StateIngesting:
 	case domain.StateRequirementAnalysis, domain.StateMaterializingWorkItems, domain.StatePRDGenerating:
 		return nil
-	case domain.StateArchitectureGenerating, domain.StateWaitingArchitectureReview, domain.StatePlanning,
+	case domain.StateArchitectureGenerating, domain.StateWaitingArchitectureReview, domain.StateSDDGenerating,
+		domain.StateWaitingSDDReview, domain.StatePlanning,
 		domain.StateExecutingWorkItems, domain.StateAssemblingRelease, domain.StateReleaseCIRunning,
 		domain.StateStagingDeploying, domain.StateStagingVerifying, domain.StateWaitingReleaseApproval,
 		domain.StateProductionDeploying, domain.StateObserving, domain.StateCompleted,

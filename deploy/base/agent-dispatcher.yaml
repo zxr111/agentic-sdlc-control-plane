@@ -38,7 +38,7 @@ spec:
             - name: WORKER_ID
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - name: WORKER_EVENT_TYPES
-              value: workflow.analyze_requirement,workflow.generate_plans,workflow.generate_architecture
+              value: workflow.analyze_requirement,workflow.generate_plans,workflow.generate_architecture,workflow.generate_sdd
             - name: WORKER_OUTBOX_ENABLED
               value: "false"
           envFrom:

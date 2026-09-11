@@ -128,3 +128,25 @@ var architectureSchema = json.RawMessage(`{
     "observability","migration_plan","rollout","rollback","architecture_deviations","risks",
     "open_questions","implementation_units"]
 }`)
+
+var sddSchema = json.RawMessage(`{
+  "type":"object","additionalProperties":false,
+  "properties":{
+    "decision":{"type":"string","enum":["changes_requested","ready_for_human_approval"]},
+    "citations":{"type":"array","items":{"type":"string","pattern":"^K-[0-9]{3}$"}},
+    "summary":{"type":"string"},
+    "services":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{
+      "work_item_key":{"type":"string"},"service":{"type":"string"},"repository":{"type":"string"},
+      "change_type":{"type":"string","enum":["CREATE","MODIFY","DELETE","CONFIGURE"]},
+      "functional_changes":{"type":"array","minItems":1,"items":{"type":"string"}},
+      "components":{"type":"array","items":{"type":"string"}},
+      "apis":{"type":"array","items":{"type":"string"}},
+      "data_changes":{"type":"array","items":{"type":"string"}},
+      "likely_paths":{"type":"array","minItems":1,"items":{"type":"string"}},
+      "acceptance_criteria":{"type":"array","minItems":1,"items":{"type":"string"}},
+      "verification":{"type":"array","minItems":1,"items":{"type":"string"}},
+      "risks":{"type":"array","items":{"type":"string"}}
+    },"required":["work_item_key","service","repository","change_type","functional_changes","components",
+      "apis","data_changes","likely_paths","acceptance_criteria","verification","risks"]}}
+  },"required":["decision","citations","summary","services"]
+}`)

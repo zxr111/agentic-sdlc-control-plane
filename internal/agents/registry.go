@@ -17,6 +17,7 @@ func BuiltinDefinitions() []Definition {
 		{AgentType: "PRD", PromptKey: "prd", SchemaName: "prd_v1", DisplayName: "PRD Agent", Instructions: prdInstructions, OutputSchema: prdSchema},
 		{AgentType: "TEST", PromptKey: "test-plan", SchemaName: "test_plan_v1", DisplayName: "测试计划 Agent", Instructions: testInstructions, OutputSchema: testPlanSchema},
 		{AgentType: "ARCHITECTURE", PromptKey: "architecture", SchemaName: "architecture_v2", DisplayName: "架构 Agent", Instructions: architectureInstructions, OutputSchema: architectureSchema},
+		{AgentType: "SDD", PromptKey: "software-design", SchemaName: "software_design_v1", DisplayName: "软件设计 Agent", Instructions: sddInstructions, OutputSchema: sddSchema},
 		{AgentType: "EVALUATION_JUDGE", PromptKey: "evaluation-judge", SchemaName: "evaluation_judge_v1", DisplayName: "评测 Judge Agent", Instructions: evaluationJudgeInstructions, OutputSchema: evaluationJudgeSchema},
 		{AgentType: "MULTIAGENT_PRIMARY", PromptKey: "multiagent-primary", SchemaName: "agent_opinion_v1", DisplayName: "多 Agent Primary", Instructions: roleInstructions("PRIMARY", "software delivery"), OutputSchema: opinionSchema},
 		{AgentType: "MULTIAGENT_CRITIC", PromptKey: "multiagent-critic", SchemaName: "agent_opinion_v1", DisplayName: "多 Agent Critic", Instructions: roleInstructions("CRITIC", "software delivery"), OutputSchema: opinionSchema},

@@ -123,6 +123,24 @@ func RenderArchitecture(value Architecture) string {
 	return out.String()
 }
 
+func RenderSDD(value SoftwareDesign) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "## Software Design Document\n\n**Decision:** `%s`\n\n%s\n\n", value.Decision, value.Summary)
+	for _, service := range value.Services {
+		fmt.Fprintf(&out, "### `%s` → `%s`\n\n- Repository: `%s`\n- Change type: `%s`\n- Work item: `%s`\n",
+			service.Service, service.Repository, service.Repository, service.ChangeType, service.WorkItemKey)
+		renderList(&out, "Functional changes", service.FunctionalChanges)
+		renderList(&out, "Components", service.Components)
+		renderList(&out, "APIs", service.APIs)
+		renderList(&out, "Data changes", service.DataChanges)
+		renderList(&out, "Likely paths", service.LikelyPaths)
+		renderList(&out, "Acceptance criteria", service.AcceptanceIDs)
+		renderList(&out, "Verification", service.Verification)
+		renderList(&out, "Risks", service.Risks)
+	}
+	return out.String()
+}
+
 func renderList(out *strings.Builder, title string, values []string) {
 	fmt.Fprintf(out, "## %s\n\n", title)
 	if len(values) == 0 {

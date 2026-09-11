@@ -13,7 +13,8 @@ GRANT SELECT ON
     agent_profiles, agent_profile_versions, skill_definitions, skill_versions,
     tool_definitions, tool_versions, tool_policies, knowledge_documents,
     knowledge_versions, knowledge_chunks, knowledge_chunk_embeddings, project_memories, evaluation_suites,
-    evaluation_cases, rag_evaluation_cases, rag_evaluation_results
+    evaluation_cases, rag_evaluation_cases, rag_evaluation_results,
+    service_catalog, planned_impacts, actual_impacts
 TO ai_factory_agent;
 
 GRANT SELECT, INSERT, UPDATE ON

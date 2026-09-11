@@ -36,7 +36,7 @@ func TestTransitions(t *testing.T) {
 	}
 	fullLifecycle := []State{
 		StateReadyForArchitecture, StateArchitectureGenerating, StateWaitingArchitectureReview,
-		StatePlanning, StateExecutingWorkItems, StateAssemblingRelease, StateReleaseCIRunning,
+		StateSDDGenerating, StateWaitingSDDReview, StatePlanning, StateExecutingWorkItems, StateAssemblingRelease, StateReleaseCIRunning,
 		StateStagingDeploying, StateStagingVerifying, StateWaitingReleaseApproval,
 		StateProductionDeploying, StateObserving, StateCompleted,
 	}

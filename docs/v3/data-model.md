@@ -72,6 +72,9 @@ erDiagram
 - `knowledge_chunks`：分块文本、向量、全文索引字段和父级路径。
 - `retrieval_runs` / `retrieval_results`：查询、过滤、分数、选择和排除原因。
 - `project_memories`：受治理的项目记忆及生命周期。
+- `service_catalog`：项目内稳定的微服务标识和仓库归属。
+- `planned_impacts`：经 SDD Gate 批准的工作项到微服务、功能点、接口、数据、路径和验收标准映射。
+- `actual_impacts`：按 Merge Request 和 Commit SHA 固化的实际文件影响及其相对 SDD 的偏差。
 
 ## 工具表
 

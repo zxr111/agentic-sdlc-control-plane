@@ -7,9 +7,11 @@ import (
 
 func TestSchemasAreValidJSON(t *testing.T) {
 	for name, schema := range map[string]json.RawMessage{
-		"requirement": requirementSchema,
-		"prd":         prdSchema,
-		"test":        testPlanSchema,
+		"requirement":  requirementSchema,
+		"prd":          prdSchema,
+		"test":         testPlanSchema,
+		"architecture": architectureSchema,
+		"sdd":          sddSchema,
 	} {
 		var value map[string]any
 		if err := json.Unmarshal(schema, &value); err != nil {

@@ -103,6 +103,32 @@ func (c *Client) GetMergeRequest(ctx context.Context, projectID, mergeRequestIID
 	return result, err
 }
 
+func (c *Client) GetMergeRequestChangedPaths(ctx context.Context, projectID, mergeRequestIID int64) ([]string, error) {
+	var result struct {
+		Changes []struct {
+			OldPath     string `json:"old_path"`
+			NewPath     string `json:"new_path"`
+			DeletedFile bool   `json:"deleted_file"`
+		} `json:"changes"`
+	}
+	if err := c.json(ctx, http.MethodGet, fmt.Sprintf("/projects/%d/merge_requests/%d/changes", projectID, mergeRequestIID), nil, &result); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var paths []string
+	for _, change := range result.Changes {
+		path := change.NewPath
+		if change.DeletedFile {
+			path = change.OldPath
+		}
+		if path != "" && !seen[path] {
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
 func (c *Client) GetRepositoryFile(ctx context.Context, projectID int64, filePath, ref string) ([]byte, error) {
 	query := url.Values{}
 	query.Set("ref", ref)
