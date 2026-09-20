@@ -86,6 +86,14 @@ Architecture Gate 通过后，SDD Agent 将每个已批准工作项拆为结构�
 
 Merge Request 合并时，系统按精确 Commit SHA 读取变更文件，将其与预计路径逐服务比对并写入 `actual_impacts`。实际影响同时以 `ACTUAL_IMPACT` 来源进入 RAG。因此后续需求分析可以检索“某微服务历史上为哪些功能改过什么”，也能区分计划设计、实际落地和架构偏差。
 
+## 本体层与图谱扩展
+
+本体层位于结构化影响知识与 Hybrid RAG 之间。它把 Service、Feature、Component、API、Data Entity、Repository、Code Path、Work Item、Acceptance Criterion、Merge Request 和 Commit 保存为项目范围内的规范实体，并将 `CHANGES`、`IMPLEMENTS_FEATURE`、`EXPOSES`、`OWNS_DATA`、`LOCATED_AT`、`VERIFIED_BY`、`MR_IMPLEMENTS` 和 `MODIFIES` 保存为有向关系。
+
+只有通过 SDD Gate 的设计关系才能以 `APPROVED` 权威等级激活；MR/Commit 产生的关系以 `VERIFIED` 激活。每个实体修订和关系都保存来源、来源版本、内容 Hash、可信等级及有效时间，Agent 推断不能绕过 Gate 直接成为事实。
+
+在线检索先按原查询进行实体链接，再从命中的 Active 实体进行项目内一跳关系扩展。扩展词只用于原有最多两轮检索中的第二轮，随后仍经过 lexical/vector recall、RRF、Rerank、权限和可信等级过滤，并完整写入 Retrieval Run 的过滤条件以便重放。
+
 ## 项目记忆
 
 项目记忆是受治理的工程知识，不是自由形式聊天历史。类型包括：

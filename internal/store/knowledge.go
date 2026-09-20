@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/knowledge"
@@ -76,6 +78,18 @@ func (s *Store) retrieveKnowledge(ctx context.Context, workflowID, agentRunID st
 	}
 	plan := knowledge.UnderstandQuery(query)
 	queries := plan.Queries
+	ontologyTerms, err := s.ExpandOntologyQuery(ctx, projectID, query, 12)
+	if err != nil {
+		return nil, fmt.Errorf("expand ontology query: %w", err)
+	}
+	if len(ontologyTerms) > 0 {
+		expanded := strings.TrimSpace(query + " " + strings.Join(ontologyTerms, " "))
+		if len(queries) == 1 {
+			queries = append(queries, expanded)
+		} else {
+			queries[1] = expanded
+		}
+	}
 	type retrievalRound struct {
 		id, query string
 		hits      []KnowledgeHit
@@ -84,6 +98,7 @@ func (s *Store) retrieveKnowledge(ctx context.Context, workflowID, agentRunID st
 	var parentID string
 	filters, _ := json.Marshal(map[string]any{"project_scoped": true, "minimum_authority": minimumAuthority,
 		"intent": plan.Intent, "required_terms": plan.RequiredTerms, "source_types": plan.SourceTypes,
+		"ontology_terms": ontologyTerms, "ontology_expansion": "active_one_hop_v1",
 		"embedder": s.knowledgeEmbedder.ModelVersion(), "reranker": s.knowledgeReranker.ModelVersion()})
 	for index, currentQuery := range queries {
 		runID := uuid.NewString()

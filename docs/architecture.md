@@ -56,6 +56,7 @@ Source changes before architecture invalidate downstream approval and return the
 - `codex_dispatches`: idempotent visible-task dispatch; no lease columns.
 - `agent_runs`, `merge_requests`, `quality_runs`, and `quality_findings`: exact model/MR/SHA evidence and hard blockers.
 - `service_catalog`, `planned_impacts`, and `actual_impacts`: approved service/function design, implementation paths, acceptance links, and post-merge deviation evidence.
+- `ontology_entity_types`, `ontology_relation_types`, `ontology_entities`, `ontology_entity_revisions`, and `ontology_relations`: governed project ontology, immutable provenance, and active graph assertions used for bounded RAG expansion.
 - `pipeline_runs`, `release_candidates`, `deployments`, and `observation_windows`: immutable delivery evidence.
 - `incidents` and `email_relays`: monitoring intake and idempotent engineer-command relay audit.
 

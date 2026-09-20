@@ -160,6 +160,18 @@ func TestSDDKnowledgeLayerMigration(t *testing.T) {
 	}
 }
 
+func TestOntologyLayerMigration(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/017_ontology_layer.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"ontology_entity_types", "ontology_relation_types", "ontology_entities", "ontology_entity_revisions", "ontology_relations"} {
+		if !strings.Contains(string(content), "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("ontology migration missing %s", table)
+		}
+	}
+}
+
 func TestAgentRunFailureClassification(t *testing.T) {
 	if !retryableAgentRunError(context.DeadlineExceeded) || !retryableAgentRunError(errors.New("provider returned HTTP 503")) {
 		t.Fatal("transient Agent Run failures were not classified as retryable")

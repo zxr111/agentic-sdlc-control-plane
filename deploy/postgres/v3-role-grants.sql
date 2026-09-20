@@ -14,7 +14,8 @@ GRANT SELECT ON
     tool_definitions, tool_versions, tool_policies, knowledge_documents,
     knowledge_versions, knowledge_chunks, knowledge_chunk_embeddings, project_memories, evaluation_suites,
     evaluation_cases, rag_evaluation_cases, rag_evaluation_results,
-    service_catalog, planned_impacts, actual_impacts
+    service_catalog, planned_impacts, actual_impacts, ontology_entity_types, ontology_relation_types,
+    ontology_entities, ontology_entity_revisions, ontology_relations
 TO ai_factory_agent;
 
 GRANT SELECT, INSERT, UPDATE ON

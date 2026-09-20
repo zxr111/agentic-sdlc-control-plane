@@ -75,6 +75,9 @@ erDiagram
 - `service_catalog`：项目内稳定的微服务标识和仓库归属。
 - `planned_impacts`：经 SDD Gate 批准的工作项到微服务、功能点、接口、数据、路径和验收标准映射。
 - `actual_impacts`：按 Merge Request 和 Commit SHA 固化的实际文件影响及其相对 SDD 的偏差。
+- `ontology_entity_types` / `ontology_relation_types`：受版本迁移管理的本体词汇与合法关系方向。
+- `ontology_entities` / `ontology_entity_revisions`：项目范围内的规范化实体及其来源版本、Hash、可信等级和有效期。
+- `ontology_relations`：带 SDD、MR、Commit 溯源的有向事实；旧设计关系只会失效，不会被覆盖删除。
 
 ## 工具表
 
