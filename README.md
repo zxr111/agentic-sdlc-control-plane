@@ -142,6 +142,7 @@ The demo overlay uses a deterministic structured-output model fixture. It is sui
 ```bash
 GITLAB_WEBHOOK_SECRET=local-webhook \
 CALLBACK_SHARED_SECRET=local-callback \
+CODING_AGENT_SHARED_SECRET=local-coding-agent \
 AGENT_RUNTIME_SHARED_SECRET=local-runtime \
 OPENAI_API_KEY=local-demo-not-a-credential \
 docker compose -f compose.yaml -f compose.demo.yaml up -d --build \
@@ -175,6 +176,7 @@ Provide credentials only through environment variables or Kubernetes Secrets. Ne
 export GITLAB_API_TOKEN='...'
 export GITLAB_WEBHOOK_SECRET='...'
 export CALLBACK_SHARED_SECRET='...'
+export CODING_AGENT_SHARED_SECRET='...'
 export CONFLUENCE_EMAIL='service-account@example.com'
 export CONFLUENCE_API_TOKEN='...'
 export OPENAI_API_KEY='...'
@@ -254,6 +256,7 @@ internal/engine/             Delivery workflow and Agent orchestration
 internal/store/              PostgreSQL state, evidence, registry, and evaluation
 internal/knowledge/          Retrieval and context policies
 internal/multiagent/         Independent role orchestration
+internal/codingagent/        Provider-neutral task manifests, Pi bridge client, and execution evidence
 internal/toolgateway/        Tool authorization and MCP gateway
 internal/dashboard/          Embedded Delivery and Agent Platform control rooms
 deploy/                      Kubernetes base and test overlay

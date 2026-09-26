@@ -35,6 +35,8 @@ spec:
               valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: GITLAB_WEBHOOK_SECRET}}
             - name: CALLBACK_SHARED_SECRET
               valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: CALLBACK_SHARED_SECRET}}
+            - name: CODING_AGENT_SHARED_SECRET
+              valueFrom: {secretKeyRef: {name: ai-sdlc-factory-secrets, key: CODING_AGENT_SHARED_SECRET}}
           envFrom:
             - configMapRef:
                 name: ai-sdlc-factory-config

@@ -42,6 +42,7 @@ func TestComponentValidationUsesLeastPrivilegeCredentials(t *testing.T) {
 	api.ComponentMode = "api"
 	api.GitLabWebhookSecret = "webhook"
 	api.CallbackSharedSecret = "callback"
+	api.CodingAgentSecret = "coding-agent"
 	if err := api.Validate(); err != nil {
 		t.Fatalf("API required unrelated worker credentials: %v", err)
 	}

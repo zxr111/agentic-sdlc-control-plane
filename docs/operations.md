@@ -27,6 +27,7 @@ kubectl -n ai-factory-test create secret generic ai-sdlc-factory-secrets \
   --from-literal=GITLAB_API_TOKEN="$GITLAB_API_TOKEN" \
   --from-literal=GITLAB_WEBHOOK_SECRET="$GITLAB_WEBHOOK_SECRET" \
   --from-literal=CALLBACK_SHARED_SECRET="$CALLBACK_SHARED_SECRET" \
+  --from-literal=CODING_AGENT_SHARED_SECRET="$CODING_AGENT_SHARED_SECRET" \
   --from-literal=CONFLUENCE_EMAIL="$CONFLUENCE_EMAIL" \
   --from-literal=CONFLUENCE_API_TOKEN="$CONFLUENCE_API_TOKEN" \
   --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY"
@@ -56,7 +57,7 @@ The `staging_verified` callback must declare whether production data or schema m
 
 Merge-request and branch pipelines run unit, integration, vet, and manifest verification. A push to the protected default branch publishes both the immutable commit image and the moving `test` tag to the project GitLab Container Registry, then automatically deploys that exact commit image. The deploy job validates every required protected variable before touching the cluster, creates the long-lived image-pull Secret from the read-only Deploy Token, applies runtime Secrets, runs the migration Job, and waits for API and worker rollouts. The migration process uses a PostgreSQL advisory lock and transactional, idempotent DDL.
 
-Required protected CI variables are `DATABASE_URL`, `GITLAB_API_TOKEN`, `GITLAB_WEBHOOK_SECRET`, `CALLBACK_SHARED_SECRET`, `CONFLUENCE_EMAIL`, `CONFLUENCE_API_TOKEN`, `OPENAI_API_KEY`, `CI_DEPLOY_USER`, and `CI_DEPLOY_PASSWORD`. Kubernetes authentication must be supplied as a protected file variable (normally `KUBECONFIG`) or by a GitLab Agent context. `DELIVERY_TRIGGER_TOKEN` is optional and must be paired with the fixed `DELIVERY_TRIGGER_URL` configuration when enabled.
+Required protected CI variables are `DATABASE_URL`, `GITLAB_API_TOKEN`, `GITLAB_WEBHOOK_SECRET`, `CALLBACK_SHARED_SECRET`, `CODING_AGENT_SHARED_SECRET`, `CONFLUENCE_EMAIL`, `CONFLUENCE_API_TOKEN`, `OPENAI_API_KEY`, `CI_DEPLOY_USER`, and `CI_DEPLOY_PASSWORD`. Kubernetes authentication must be supplied as a protected file variable (normally `KUBECONFIG`) or by a GitLab Agent context. `DELIVERY_TRIGGER_TOKEN` is optional and must be paired with the fixed `DELIVERY_TRIGGER_URL` configuration when enabled.
 
 Before first deployment, verify the ingress class, hostname, TLS secret, registry pull secret, PostgreSQL network route, TLS mode, and NetworkPolicy namespace selectors against the test cluster.
 

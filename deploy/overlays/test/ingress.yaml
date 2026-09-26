@@ -42,3 +42,10 @@ spec:
                 name: ai-sdlc-factory-api
                 port:
                   name: http
+          - path: /coding-agent
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-sdlc-factory-api
+                port:
+                  name: http

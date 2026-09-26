@@ -142,6 +142,7 @@ API 内嵌两个每 10 秒刷新一次的只读控制台：
 ```bash
 GITLAB_WEBHOOK_SECRET=local-webhook \
 CALLBACK_SHARED_SECRET=local-callback \
+CODING_AGENT_SHARED_SECRET=local-coding-agent \
 AGENT_RUNTIME_SHARED_SECRET=local-runtime \
 OPENAI_API_KEY=local-demo-not-a-credential \
 docker compose -f compose.yaml -f compose.demo.yaml up -d --build \
@@ -175,6 +176,7 @@ curl http://127.0.0.1:8080/hello
 export GITLAB_API_TOKEN='...'
 export GITLAB_WEBHOOK_SECRET='...'
 export CALLBACK_SHARED_SECRET='...'
+export CODING_AGENT_SHARED_SECRET='...'
 export CONFLUENCE_EMAIL='service-account@example.com'
 export CONFLUENCE_API_TOKEN='...'
 export OPENAI_API_KEY='...'
@@ -254,6 +256,7 @@ internal/engine/             交付工作流与 Agent 编排
 internal/store/              PostgreSQL 状态、证据、注册表与评测
 internal/knowledge/          检索与上下文策略
 internal/multiagent/         独立角色编排
+internal/codingagent/        通用任务清单、Pi Bridge 客户端与执行证据
 internal/toolgateway/        工具授权与 MCP 网关
 internal/dashboard/          内嵌交付工作流与 Agent 平台控制台
 deploy/                      Kubernetes 基础清单与测试 Overlay

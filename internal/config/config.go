@@ -20,6 +20,7 @@ type Config struct {
 	GitLabToken           string
 	GitLabWebhookSecret   string
 	CallbackSharedSecret  string
+	CodingAgentSecret     string
 	ConfluenceBaseURL     string
 	ConfluenceEmail       string
 	ConfluenceToken       string
@@ -86,6 +87,7 @@ func Load() (Config, error) {
 		DeliveryTriggerToken:  strings.TrimSpace(os.Getenv("DELIVERY_TRIGGER_TOKEN")),
 		GitLabWebhookSecret:   os.Getenv("GITLAB_WEBHOOK_SECRET"),
 		CallbackSharedSecret:  os.Getenv("CALLBACK_SHARED_SECRET"),
+		CodingAgentSecret:     os.Getenv("CODING_AGENT_SHARED_SECRET"),
 		WorkerID:              env("WORKER_ID", hostname()),
 		WorkerEventTypes:      csvEnv("WORKER_EVENT_TYPES"),
 		WorkerOutboxEnabled:   boolEnv("WORKER_OUTBOX_ENABLED", true),
@@ -128,6 +130,7 @@ func (c Config) Validate() error {
 	case "api":
 		required["GITLAB_WEBHOOK_SECRET"] = c.GitLabWebhookSecret
 		required["CALLBACK_SHARED_SECRET"] = c.CallbackSharedSecret
+		required["CODING_AGENT_SHARED_SECRET"] = c.CodingAgentSecret
 	case "worker":
 		required["GITLAB_API_TOKEN"] = c.GitLabToken
 		required["CONFLUENCE_EMAIL"] = c.ConfluenceEmail
@@ -139,6 +142,7 @@ func (c Config) Validate() error {
 		required["GITLAB_API_TOKEN"] = c.GitLabToken
 		required["GITLAB_WEBHOOK_SECRET"] = c.GitLabWebhookSecret
 		required["CALLBACK_SHARED_SECRET"] = c.CallbackSharedSecret
+		required["CODING_AGENT_SHARED_SECRET"] = c.CodingAgentSecret
 		required["CONFLUENCE_EMAIL"] = c.ConfluenceEmail
 		required["CONFLUENCE_API_TOKEN"] = c.ConfluenceToken
 		required["OPENAI_API_KEY"] = c.OpenAIAPIKey

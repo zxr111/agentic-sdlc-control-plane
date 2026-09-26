@@ -7,6 +7,7 @@ Start the stack with the demo overlay:
 ```bash
 GITLAB_WEBHOOK_SECRET=local-webhook \
 CALLBACK_SHARED_SECRET=local-callback \
+CODING_AGENT_SHARED_SECRET=local-coding-agent \
 AGENT_RUNTIME_SHARED_SECRET=local-runtime \
 OPENAI_API_KEY=local-demo-not-a-credential \
 docker compose -f compose.yaml -f compose.demo.yaml up -d --build postgres migrate api agent-runtime model-mock knowledge-indexer

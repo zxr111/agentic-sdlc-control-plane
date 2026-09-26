@@ -67,6 +67,7 @@ services:
       DATABASE_URL: postgres://factory:factory@postgres:5432/ai_sdlc_factory_test?sslmode=disable
       GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:?GITLAB_WEBHOOK_SECRET is required}
       CALLBACK_SHARED_SECRET: ${CALLBACK_SHARED_SECRET:?CALLBACK_SHARED_SECRET is required}
+      CODING_AGENT_SHARED_SECRET: ${CODING_AGENT_SHARED_SECRET:?CODING_AGENT_SHARED_SECRET is required}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

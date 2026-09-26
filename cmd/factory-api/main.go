@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/codingagentapi"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/config"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/dashboard"
 	"git.kuainiujinke.com/argus/ai-sdlc-factory/internal/hello"
@@ -32,6 +33,7 @@ func main() {
 	defer repository.Close()
 
 	mux := http.NewServeMux()
+	codingagentapi.New(cfg.CodingAgentSecret, repository).Register(mux)
 	mux.Handle("/", webhook.NewWithCallbackSecret(
 		cfg.GitLabWebhookSecret, cfg.CallbackSharedSecret, cfg.Projects, repository, logger,
 	).Routes())
