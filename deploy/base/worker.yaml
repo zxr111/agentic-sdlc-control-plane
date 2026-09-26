@@ -42,7 +42,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: WORKER_EVENT_TYPES
-              value: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile
+              value: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile,workflow.evaluate_auto_gate
           envFrom:
             - configMapRef:
                 name: ai-sdlc-factory-config

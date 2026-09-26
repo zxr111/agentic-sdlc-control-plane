@@ -473,6 +473,12 @@ func (s *Store) PublishGate(ctx context.Context, workflow domain.Workflow, artif
 	if err := enqueueOutboxTx(ctx, tx, note); err != nil {
 		return err
 	}
+	autoPayload, _ := json.Marshal(map[string]any{"gate_id": gate.ID})
+	if _, err := tx.ExecContext(ctx, `INSERT INTO event_queue(dedupe_key,event_type,payload_json,available_at,last_error)
+		VALUES($1,'workflow.evaluate_auto_gate',$2,CURRENT_TIMESTAMP + INTERVAL '2 seconds','') ON CONFLICT(dedupe_key) DO NOTHING`,
+		"auto-gate:"+gate.ID, string(autoPayload)); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -519,12 +525,25 @@ func (s *Store) PublishPlanningGates(ctx context.Context, workflow domain.Workfl
 		if err := enqueueOutboxTx(ctx, tx, notes[index]); err != nil {
 			return err
 		}
+		autoPayload, _ := json.Marshal(map[string]any{"gate_id": gate.ID})
+		if _, err := tx.ExecContext(ctx, `INSERT INTO event_queue(dedupe_key,event_type,payload_json,available_at,last_error)
+			VALUES($1,'workflow.evaluate_auto_gate',$2,CURRENT_TIMESTAMP + INTERVAL '2 seconds','') ON CONFLICT(dedupe_key) DO NOTHING`,
+			"auto-gate:"+gate.ID, string(autoPayload)); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE workflows SET state=$1,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2`,
 		domain.StateWaitingPRDAndTestReview, workflow.ID); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) ArtifactHasCompletedAgentRun(ctx context.Context, artifactID string) (bool, error) {
+	var completed bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_runs
+		WHERE output_artifact_id=$1 AND status='COMPLETED' AND lifecycle_phase='COMPLETED')`, artifactID).Scan(&completed)
+	return completed, err
 }
 
 func (s *Store) PublishOperationalGate(ctx context.Context, artifact domain.Artifact, gate domain.Gate, note domain.OutboxMessage) error {

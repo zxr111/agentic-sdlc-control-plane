@@ -40,6 +40,13 @@
       "INCIDENT": ["brucegong"],
       "PRODUCTION_MIGRATION": ["brucegong"]
     },
+    "gate_automation": {
+      "REQUIREMENT": {"mode": "HYBRID", "maximum_automatic_risk": "L2", "policy_version": "risk-gate-v1"},
+      "PRD": {"mode": "HYBRID", "maximum_automatic_risk": "L2", "policy_version": "risk-gate-v1"},
+      "TEST": {"mode": "HYBRID", "maximum_automatic_risk": "L2", "policy_version": "risk-gate-v1"},
+      "ARCHITECTURE": {"mode": "HYBRID", "maximum_automatic_risk": "L2", "policy_version": "risk-gate-v1"},
+      "SDD": {"mode": "HYBRID", "maximum_automatic_risk": "L2", "policy_version": "risk-gate-v1"}
+    },
     "owner_ids": {
       "requirements": 995,
       "backend": 1272,

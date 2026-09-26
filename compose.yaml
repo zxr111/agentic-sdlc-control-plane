@@ -91,7 +91,7 @@ services:
       DELIVERY_TRIGGER_URL: ${DELIVERY_TRIGGER_URL:-}
       DELIVERY_TRIGGER_TOKEN: ${DELIVERY_TRIGGER_TOKEN:-}
       WORKER_ID: compose-worker
-      WORKER_EVENT_TYPES: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile
+      WORKER_EVENT_TYPES: gitlab.issue.changed,gitlab.gate.command,gitlab.control.command,gitlab.lifecycle,external.delivery,external.incident,system.reconcile,workflow.evaluate_auto_gate
     depends_on:
       migrate:
         condition: service_completed_successfully

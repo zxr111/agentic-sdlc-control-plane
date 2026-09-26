@@ -170,6 +170,7 @@
           <span class="gate-id">${escapeHTML(gate.id)}</span>
           <div class="gate-actions">
             <span>${gate.decided_at ? `Decided ${relativeTime(gate.decided_at)}` : `Opened ${relativeTime(gate.opened_at)}`}</span>
+            ${gate.decision_source ? `<span>${escapeHTML(gate.decision_source)}${gate.risk_level ? ` · ${escapeHTML(gate.risk_level)}` : ""}</span>` : ""}
             ${gate.feedback ? `<span>Feedback recorded</span>` : ""}
           </div>
         </div>

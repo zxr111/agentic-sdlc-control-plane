@@ -43,6 +43,8 @@ After staging verification, a release that declares a production migration must 
 
 Source changes before architecture invalidate downstream approval and return the workflow to intake. Changes after architecture are audited and require an explicit impact decision instead of silently rewriting an active implementation. Request Changes or Reject returns the affected artifact or work item for rework. The transition allowlist is enforced by code and recorded in `audit_events`.
 
+Requirement, PRD, Test, Architecture, and SDD Gates may use project-scoped `HYBRID` automation. A deterministic versioned policy approves only artifacts with no blockers or open questions and a risk at or below the configured threshold; every decision binds a Risk Assessment and evidence Hash. Code Review, Release, Incident, and Production Migration Gates cannot be automated. Policy uncertainty or excessive risk leaves the Gate open for an engineer.
+
 ## Durable records
 
 - `workflows`: one active workflow for each GitLab project/Issue pair.

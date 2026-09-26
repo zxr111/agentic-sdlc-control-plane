@@ -172,6 +172,18 @@ func TestOntologyLayerMigration(t *testing.T) {
 	}
 }
 
+func TestAutonomyPolicyMigration(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/018_autonomy_policy.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	if !strings.Contains(source, "CREATE TABLE IF NOT EXISTS risk_assessments") ||
+		!strings.Contains(source, "gate_decisions ADD COLUMN IF NOT EXISTS decision_source") {
+		t.Fatal("autonomy migration does not preserve policy decision evidence")
+	}
+}
+
 func TestAgentRunFailureClassification(t *testing.T) {
 	if !retryableAgentRunError(context.DeadlineExceeded) || !retryableAgentRunError(errors.New("provider returned HTTP 503")) {
 		t.Fatal("transient Agent Run failures were not classified as retryable")

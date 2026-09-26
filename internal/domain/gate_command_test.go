@@ -94,3 +94,12 @@ func TestProductionProjectRequiresEveryOperationalGateReviewer(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestHighRiskGatesCannotBeAutomated(t *testing.T) {
+	project := ProjectConfig{GitLabProjectID: 1, Path: "argus/test", FullLifecycle: true,
+		ReviewerIDs:    map[GateType][]int64{GateRequirement: {1}, GatePRD: {1}, GateTest: {1}, GateArchitecture: {1}, GateCodeReview: {1}, GateRelease: {1}, GateIncident: {1}},
+		GateAutomation: map[GateType]GateAutomationPolicy{GateRelease: {Mode: "POLICY", MaximumAutomaticRisk: RiskL1}}}
+	if err := project.Validate(); err == nil {
+		t.Fatal("release gate automation must be rejected")
+	}
+}

@@ -84,16 +84,19 @@ type DashboardWorkItem struct {
 }
 
 type DashboardGate struct {
-	ID            string            `json:"id"`
-	Type          domain.GateType   `json:"type"`
-	Status        domain.GateStatus `json:"status"`
-	ArtifactID    string            `json:"artifact_id"`
-	Revision      int               `json:"revision"`
-	ReviewerIDs   []int64           `json:"reviewer_ids"`
-	OpenedAt      time.Time         `json:"opened_at"`
-	DecidedAt     *time.Time        `json:"decided_at,omitempty"`
-	DecisionActor int64             `json:"decision_actor,omitempty"`
-	Feedback      string            `json:"feedback,omitempty"`
+	ID             string            `json:"id"`
+	Type           domain.GateType   `json:"type"`
+	Status         domain.GateStatus `json:"status"`
+	ArtifactID     string            `json:"artifact_id"`
+	Revision       int               `json:"revision"`
+	ReviewerIDs    []int64           `json:"reviewer_ids"`
+	OpenedAt       time.Time         `json:"opened_at"`
+	DecidedAt      *time.Time        `json:"decided_at,omitempty"`
+	DecisionActor  int64             `json:"decision_actor,omitempty"`
+	Feedback       string            `json:"feedback,omitempty"`
+	DecisionSource string            `json:"decision_source,omitempty"`
+	PolicyVersion  string            `json:"policy_version,omitempty"`
+	RiskLevel      string            `json:"risk_level,omitempty"`
 }
 
 type DashboardArtifact struct {
@@ -280,8 +283,12 @@ func (s *Store) loadDashboardGates(ctx context.Context, result *DashboardData, l
 			SELECT id FROM workflows ORDER BY updated_at DESC LIMIT $1
 		)
 		SELECT g.workflow_id,g.id,g.gate_type,g.status,g.artifact_id,g.revision,g.reviewer_ids,
-			g.opened_at,g.decided_at,g.decision_actor,g.feedback
+			g.opened_at,g.decided_at,g.decision_actor,g.feedback,COALESCE(d.decision_source,''),
+			COALESCE(d.policy_version,''),COALESCE(ra.risk_level,'')
 		FROM gates g JOIN recent r ON r.id=g.workflow_id
+		LEFT JOIN LATERAL (SELECT decision_source,policy_version,risk_assessment_id FROM gate_decisions
+			WHERE gate_id=g.id ORDER BY created_at DESC LIMIT 1) d ON true
+		LEFT JOIN risk_assessments ra ON ra.id=d.risk_assessment_id
 		ORDER BY g.opened_at DESC`, limit)
 	if err != nil {
 		return err
@@ -295,7 +302,7 @@ func (s *Store) loadDashboardGates(ctx context.Context, result *DashboardData, l
 		var decidedAt sql.NullTime
 		if err := rows.Scan(&workflowID, &gate.ID, &gate.Type, &gate.Status, &gate.ArtifactID,
 			&gate.Revision, &reviewers, &gate.OpenedAt, &decidedAt, &gate.DecisionActor,
-			&gate.Feedback); err != nil {
+			&gate.Feedback, &gate.DecisionSource, &gate.PolicyVersion, &gate.RiskLevel); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(reviewers, &gate.ReviewerIDs); err != nil {

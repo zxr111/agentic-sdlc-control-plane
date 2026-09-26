@@ -105,6 +105,22 @@ const (
 	GateProductionMigration GateType = "PRODUCTION_MIGRATION"
 )
 
+type RiskLevel string
+
+const (
+	RiskL0 RiskLevel = "L0"
+	RiskL1 RiskLevel = "L1"
+	RiskL2 RiskLevel = "L2"
+	RiskL3 RiskLevel = "L3"
+	RiskL4 RiskLevel = "L4"
+)
+
+type GateAutomationPolicy struct {
+	Mode                 string    `json:"mode"`
+	MaximumAutomaticRisk RiskLevel `json:"maximum_automatic_risk"`
+	PolicyVersion        string    `json:"policy_version,omitempty"`
+}
+
 type GateStatus string
 
 const (
@@ -238,18 +254,19 @@ type OutboxMessage struct {
 }
 
 type ProjectConfig struct {
-	GitLabProjectID   int64                 `json:"gitlab_project_id"`
-	Path              string                `json:"path"`
-	EnabledLabel      string                `json:"enabled_label"`
-	ReviewerIDs       map[GateType][]int64  `json:"reviewer_ids"`
-	ReviewerMentions  map[GateType][]string `json:"reviewer_mentions,omitempty"`
-	OwnerIDs          map[string]int64      `json:"owner_ids,omitempty"`
-	Module            string                `json:"module,omitempty"`
-	FullLifecycle     bool                  `json:"full_lifecycle,omitempty"`
-	DefaultBranch     string                `json:"default_branch,omitempty"`
-	IntegrationBranch bool                  `json:"integration_branch,omitempty"`
-	ProductionEnabled bool                  `json:"production_enabled,omitempty"`
-	AllowedSkills     []string              `json:"allowed_skills,omitempty"`
+	GitLabProjectID   int64                             `json:"gitlab_project_id"`
+	Path              string                            `json:"path"`
+	EnabledLabel      string                            `json:"enabled_label"`
+	ReviewerIDs       map[GateType][]int64              `json:"reviewer_ids"`
+	ReviewerMentions  map[GateType][]string             `json:"reviewer_mentions,omitempty"`
+	OwnerIDs          map[string]int64                  `json:"owner_ids,omitempty"`
+	Module            string                            `json:"module,omitempty"`
+	FullLifecycle     bool                              `json:"full_lifecycle,omitempty"`
+	DefaultBranch     string                            `json:"default_branch,omitempty"`
+	IntegrationBranch bool                              `json:"integration_branch,omitempty"`
+	ProductionEnabled bool                              `json:"production_enabled,omitempty"`
+	AllowedSkills     []string                          `json:"allowed_skills,omitempty"`
+	GateAutomation    map[GateType]GateAutomationPolicy `json:"gate_automation,omitempty"`
 }
 
 func (p ProjectConfig) Validate() error {
@@ -274,7 +291,29 @@ func (p ProjectConfig) Validate() error {
 			return fmt.Errorf("project %s has no reviewers for gate %s", p.Path, gate)
 		}
 	}
+	for gate, policy := range p.GateAutomation {
+		if policy.Mode != "HUMAN" && policy.Mode != "HYBRID" && policy.Mode != "POLICY" {
+			return fmt.Errorf("project %s gate %s has invalid automation mode %q", p.Path, gate, policy.Mode)
+		}
+		if policy.Mode != "HUMAN" && (gate == GateCodeReview || gate == GateRelease || gate == GateIncident || gate == GateProductionMigration) {
+			return fmt.Errorf("project %s cannot automate high-risk gate %s", p.Path, gate)
+		}
+		if policy.Mode != "HUMAN" && !ValidRiskLevel(policy.MaximumAutomaticRisk) {
+			return fmt.Errorf("project %s gate %s has invalid automatic risk %q", p.Path, gate, policy.MaximumAutomaticRisk)
+		}
+	}
 	return nil
+}
+
+func ValidRiskLevel(value RiskLevel) bool {
+	return value == RiskL0 || value == RiskL1 || value == RiskL2 || value == RiskL3 || value == RiskL4
+}
+
+func RiskAtMost(value, maximum RiskLevel) bool {
+	rank := map[RiskLevel]int{RiskL0: 0, RiskL1: 1, RiskL2: 2, RiskL3: 3, RiskL4: 4}
+	left, leftOK := rank[value]
+	right, rightOK := rank[maximum]
+	return leftOK && rightOK && left <= right
 }
 
 type WorkItemState string
