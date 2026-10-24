@@ -23,6 +23,25 @@ func (f *fakeRepository) SaveCodingAgentEvidence(_ context.Context, evidence cod
 	return nil
 }
 
+func (f *fakeRepository) EnsureCodingSession(context.Context, string) (codingagent.CodingSession, error) {
+	return codingagent.CodingSession{ID: "session", State: codingagent.StatePlanning}, nil
+}
+func (f *fakeRepository) GetCodingSession(context.Context, string) (codingagent.CodingSession, error) {
+	return codingagent.CodingSession{ID: "session", State: codingagent.StatePlanning}, nil
+}
+func (f *fakeRepository) PendingCodingRuns(context.Context, string) ([]codingagent.AgentRun, error) {
+	return []codingagent.AgentRun{{ID: "run", Role: codingagent.RolePlanner}}, nil
+}
+func (f *fakeRepository) StartCodingAgentRun(context.Context, string, string) (codingagent.AgentRun, error) {
+	return codingagent.AgentRun{ID: "run", Status: codingagent.RunRunning}, nil
+}
+func (f *fakeRepository) CompleteCodingAgentRun(context.Context, string, codingagent.RunCompletion) (codingagent.CodingSession, error) {
+	return codingagent.CodingSession{ID: "session", State: codingagent.StateTestDesign}, nil
+}
+func (f *fakeRepository) FailCodingAgentRun(context.Context, string, codingagent.RunFailure) (codingagent.CodingSession, error) {
+	return codingagent.CodingSession{ID: "session", State: codingagent.StateFailed}, nil
+}
+
 func TestManifestRequiresAuthentication(t *testing.T) {
 	repository := &fakeRepository{}
 	mux := http.NewServeMux()

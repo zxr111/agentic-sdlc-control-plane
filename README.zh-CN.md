@@ -257,6 +257,7 @@ internal/store/              PostgreSQL 状态、证据、注册表与评测
 internal/knowledge/          检索与上下文策略
 internal/multiagent/         独立角色编排
 internal/codingagent/        通用任务清单、Pi Bridge 客户端与执行证据
+internal/codingagentapi/     工程师可见客户端的会话、运行与证据 API
 internal/toolgateway/        工具授权与 MCP 网关
 internal/dashboard/          内嵌交付工作流与 Agent 平台控制台
 deploy/                      Kubernetes 基础清单与测试 Overlay

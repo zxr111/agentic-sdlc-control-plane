@@ -196,6 +196,18 @@ func TestCodingAgentControlKernelMigration(t *testing.T) {
 	}
 }
 
+func TestCodingMultiAgentMigration(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/020_coding_multi_agent.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"coding_sessions", "coding_agent_runs", "coding_artifacts", "coding_run_inputs", "coding_stage_transitions"} {
+		if !strings.Contains(string(content), "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Fatalf("coding multi-agent migration missing %s", table)
+		}
+	}
+}
+
 func TestAgentRunFailureClassification(t *testing.T) {
 	if !retryableAgentRunError(context.DeadlineExceeded) || !retryableAgentRunError(errors.New("provider returned HTTP 503")) {
 		t.Fatal("transient Agent Run failures were not classified as retryable")

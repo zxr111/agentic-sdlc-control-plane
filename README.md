@@ -257,6 +257,7 @@ internal/store/              PostgreSQL state, evidence, registry, and evaluatio
 internal/knowledge/          Retrieval and context policies
 internal/multiagent/         Independent role orchestration
 internal/codingagent/        Provider-neutral task manifests, Pi bridge client, and execution evidence
+internal/codingagentapi/     Authenticated visible-client session, run, and evidence API
 internal/toolgateway/        Tool authorization and MCP gateway
 internal/dashboard/          Embedded Delivery and Agent Platform control rooms
 deploy/                      Kubernetes base and test overlay
